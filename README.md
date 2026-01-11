@@ -47,7 +47,10 @@
 | Secret 名称 | 说明 | 必填 |
 |------------|------|:----:|
 | `GEMINI_API_KEY` | [Google AI Studio](https://aistudio.google.com/) 获取 | ✅ |
-| `WECHAT_WEBHOOK_URL` | 企业微信机器人 Webhook | ✅ |
+| `WECHAT_WEBHOOK_URL` | 企业微信机器人 Webhook | 选填 |
+| `EMAIL_SENDER` | 发件人邮箱（如 QQ 邮箱） | 选填 |
+| `EMAIL_PASSWORD` | 邮箱授权码（非密码） | 选填 |
+| `EMAIL_RECEIVER` | 收件人邮箱 | 选填 |
 | `STOCK_LIST` | 自选股代码，如 `600519,300750,002594` | ✅ |
 | `TAVILY_API_KEYS` | [Tavily](https://tavily.com/) 搜索 API（新闻搜索） | 推荐 |
 | `SERPAPI_API_KEYS` | [SerpAPI](https://serpapi.com/) Key | 可选 |
@@ -141,9 +144,14 @@ docker-compose logs -f
 ### 环境变量
 
 ```bash
-# === 必填 ===
+# === 必填 (二选一) ===
 GEMINI_API_KEY=your_gemini_key          # Gemini AI
 WECHAT_WEBHOOK_URL=https://qyapi...     # 企业微信机器人
+# 或者配置邮件通知
+EMAIL_SENDER=123456@qq.com
+EMAIL_PASSWORD=your_auth_code
+EMAIL_RECEIVER=123456@qq.com
+
 STOCK_LIST=600519,300750,002594         # 自选股列表
 
 # === 推荐 ===

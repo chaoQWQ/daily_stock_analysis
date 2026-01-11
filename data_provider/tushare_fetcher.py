@@ -274,7 +274,7 @@ if __name__ == "__main__":
     fetcher = TushareFetcher()
     
     try:
-        df = fetcher.get_daily_data('600519')  # 茅台
+        df = fetcher.get_daily_data('600276')  # 茅台
         print(f"获取成功，共 {len(df)} 条数据")
         print(df.tail())
     except Exception as e:

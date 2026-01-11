@@ -20,8 +20,8 @@ A股自选股智能分析系统 - 环境验证测试
 
 """
 import os
-os.environ["http_proxy"] = "http://127.0.0.1:10809"
-os.environ["https_proxy"] = "http://127.0.0.1:10809"
+# os.environ["http_proxy"] = "http://127.0.0.1:10809"
+# os.environ["https_proxy"] = "http://127.0.0.1:10809"
 
 import argparse
 import logging
@@ -75,6 +75,7 @@ def test_config():
     print(f"  Gemini 备选模型: {config.gemini_model_fallback}")
     
     print(f"  企业微信 Webhook: {'已配置 ✓' if config.wechat_webhook_url else '未配置 ✗'}")
+    print(f"  邮件通知: {'已配置 ✓' if config.email_sender and config.email_password else '未配置 ✗'}")
     
     print_section("配置验证")
     warnings = config.validate()
@@ -318,11 +319,16 @@ def test_notification():
     
     print_section("配置检查")
     if service.is_available():
-        print(f"  ✓ 企业微信 Webhook 已配置")
-        webhook_preview = config.wechat_webhook_url[:50] + "..." if len(config.wechat_webhook_url) > 50 else config.wechat_webhook_url
-        print(f"    URL: {webhook_preview}")
+        if config.wechat_webhook_url:
+            print(f"  ✓ 企业微信 Webhook 已配置")
+            webhook_preview = config.wechat_webhook_url[:50] + "..." if len(config.wechat_webhook_url) > 50 else config.wechat_webhook_url
+            print(f"    URL: {webhook_preview}")
+        if config.email_sender:
+            print(f"  ✓ 邮件通知已配置")
+            print(f"    发件人: {config.email_sender}")
+            print(f"    收件人: {config.email_receiver}")
     else:
-        print(f"  ✗ 企业微信 Webhook 未配置")
+        print(f"  ✗ 通知服务未配置 (Webhook/Email)")
         return False
     
     print_section("发送测试消息")
@@ -332,7 +338,7 @@ def test_notification():
 这是一条来自 **A股自选股智能分析系统** 的测试消息。
 
 - 测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-- 测试目的: 验证企业微信 Webhook 配置
+- 测试目的: 验证通知推送配置 (Webhook/Email)
 
 如果您收到此消息，说明通知功能配置正确 ✓"""
     

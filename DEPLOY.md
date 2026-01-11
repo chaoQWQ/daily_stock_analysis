@@ -187,6 +187,9 @@ journalctl -u stock-analyzer -f
 | `GEMINI_API_KEY` | AI 分析必需 | [Google AI Studio](https://aistudio.google.com/) |
 | `STOCK_LIST` | 自选股列表 | 逗号分隔的股票代码 |
 | `WECHAT_WEBHOOK_URL` | 微信推送 | 企业微信群机器人 |
+| `EMAIL_SENDER` | 邮件推送 | 发件人邮箱 |
+| `EMAIL_PASSWORD` | 邮件推送 | 邮箱授权码 |
+| `EMAIL_RECEIVER` | 邮件推送 | 收件人邮箱 |
 
 ### 可选配置项
 

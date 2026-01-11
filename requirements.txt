@@ -31,3 +31,4 @@ fake-useragent>=1.4.0       # 随机 User-Agent 防封禁
 
 # 数据库
 # SQLite 是 Python 内置，无需额外安装
+markdown>=3.4.0             # Markdown 转 HTML (用于邮件推送)

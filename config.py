@@ -51,6 +51,13 @@ class Config:
     # === 通知配置 ===
     wechat_webhook_url: Optional[str] = None
     
+    # === 邮件通知配置 ===
+    email_sender: Optional[str] = None      # 发件人邮箱
+    email_password: Optional[str] = None    # 邮箱授权码
+    email_receiver: Optional[str] = None    # 收件人邮箱
+    smtp_server: str = "smtp.qq.com"        # SMTP 服务器
+    smtp_port: int = 465                    # SMTP 端口
+    
     # === 数据库配置 ===
     database_path: str = "./data/stock_analysis.db"
     
@@ -142,6 +149,11 @@ class Config:
             tavily_api_keys=tavily_api_keys,
             serpapi_keys=serpapi_keys,
             wechat_webhook_url=os.getenv('WECHAT_WEBHOOK_URL'),
+            email_sender=os.getenv('EMAIL_SENDER'),
+            email_password=os.getenv('EMAIL_PASSWORD'),
+            email_receiver=os.getenv('EMAIL_RECEIVER'),
+            smtp_server=os.getenv('SMTP_SERVER', 'smtp.qq.com'),
+            smtp_port=int(os.getenv('SMTP_PORT', '465')),
             database_path=os.getenv('DATABASE_PATH', './data/stock_analysis.db'),
             log_dir=os.getenv('LOG_DIR', './logs'),
             log_level=os.getenv('LOG_LEVEL', 'INFO'),
@@ -178,8 +190,21 @@ class Config:
         if not self.tavily_api_keys and not self.serpapi_keys:
             warnings.append("提示：未配置搜索引擎 API Key (Tavily/SerpAPI)，新闻搜索功能将不可用")
         
-        if not self.wechat_webhook_url:
-            warnings.append("提示：未配置企业微信 Webhook，将不发送推送通知")
+        # 通知配置检查
+        has_notification = False
+        
+        if self.wechat_webhook_url:
+            has_notification = True
+        else:
+            warnings.append("提示：未配置企业微信 Webhook")
+            
+        if self.email_sender and self.email_password and self.email_receiver:
+            has_notification = True
+        else:
+            warnings.append("提示：未配置邮件通知")
+            
+        if not has_notification:
+            warnings.append("警告：未配置任何通知渠道，将不发送推送通知")
         
         return warnings
     
