@@ -13,7 +13,7 @@ A股自选股智能分析系统 - 通知层
 import logging
 import smtplib
 import markdown
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 from email.header import Header
 from email.utils import formataddr
@@ -78,13 +78,15 @@ class NotificationService:
             Markdown 格式的日报内容
         """
         if report_date is None:
-            report_date = datetime.now().strftime('%Y-%m-%d')
+            # 使用北京时间
+            bj_time = datetime.now(timezone(timedelta(hours=8)))
+            report_date = bj_time.strftime('%Y-%m-%d')
         
         # 标题
         report_lines = [
             f"# 📅 {report_date} A股自选股智能分析报告",
             "",
-            f"> 共分析 **{len(results)}** 只股票 | 报告生成时间：{datetime.now().strftime('%H:%M:%S')}",
+            f"> 共分析 **{len(results)}** 只股票 | 报告生成时间：{datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M:%S')}",
             "",
             "---",
             "",
@@ -250,7 +252,7 @@ class NotificationService:
         # 底部信息（去除免责声明）
         report_lines.extend([
             "",
-            f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
+            f"*报告生成时间：{datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
         
         return "\n".join(report_lines)
@@ -298,7 +300,7 @@ class NotificationService:
             Markdown 格式的决策仪表盘日报
         """
         if report_date is None:
-            report_date = datetime.now().strftime('%Y-%m-%d')
+            report_date = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
         
         # 按评分排序（高分在前）
         sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
@@ -541,7 +543,7 @@ class NotificationService:
         # 底部（去除免责声明）
         report_lines.extend([
             "",
-            f"*报告生成时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*",
+            f"*报告生成时间：{datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}*",
         ])
         
         return "\n".join(report_lines)
@@ -558,7 +560,7 @@ class NotificationService:
         Returns:
             精简版决策仪表盘
         """
-        report_date = datetime.now().strftime('%Y-%m-%d')
+        report_date = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
         
         # 按评分排序
         sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
@@ -675,7 +677,7 @@ class NotificationService:
             lines.append("")
         
         # 底部
-        lines.append(f"*生成时间: {datetime.now().strftime('%H:%M')}*")
+        lines.append(f"*生成时间: {datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M')}*")
         
         content = "\n".join(lines)
         
@@ -696,7 +698,7 @@ class NotificationService:
         Returns:
             精简版 Markdown 内容
         """
-        report_date = datetime.now().strftime('%Y-%m-%d')
+        report_date = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
         
         # 按评分排序
         sorted_results = sorted(results, key=lambda x: x.sentiment_score, reverse=True)
@@ -822,7 +824,7 @@ class NotificationService:
             
             # 构造邮件
             message = MIMEText(full_html, 'html', 'utf-8')
-            message['From'] = formataddr(("智能分析助手", self._email_sender))
+            message['From'] = formataddr(("大A智能分析助手", self._email_sender))
             message['To'] = formataddr(("投资者", self._email_receiver))
             message['Subject'] = Header(title, 'utf-8')
             
@@ -971,7 +973,7 @@ class NotificationService:
         from pathlib import Path
         
         if filename is None:
-            date_str = datetime.now().strftime('%Y%m%d')
+            date_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y%m%d')
             filename = f"report_{date_str}.md"
         
         # 确保 reports 目录存在

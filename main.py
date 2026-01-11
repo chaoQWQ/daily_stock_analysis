@@ -35,7 +35,7 @@ import logging
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Tuple
@@ -70,7 +70,7 @@ def setup_logging(debug: bool = False, log_dir: str = "./logs") -> None:
     log_path.mkdir(parents=True, exist_ok=True)
     
     # 日志文件路径（按日期分文件）
-    today_str = datetime.now().strftime('%Y%m%d')
+    today_str = datetime.now(timezone(timedelta(hours=8))).strftime('%Y%m%d')
     log_file = log_path / f"stock_analysis_{today_str}.log"
     debug_log_file = log_path / f"stock_analysis_debug_{today_str}.log"
     
@@ -659,7 +659,32 @@ def parse_arguments() -> argparse.Namespace:
         help='跳过大盘复盘分析'
     )
     
+    parser.add_argument(
+        '--morning',
+        action='store_true',
+        help='执行早盘策略分析（推荐每日08:40运行）'
+    )
+    
     return parser.parse_args()
+
+
+def run_morning_job(notifier: NotificationService, analyzer=None, search_service=None):
+    """执行早盘策略任务"""
+    logger.info("启动早盘策略任务...")
+    try:
+        market_analyzer = MarketAnalyzer(
+            search_service=search_service,
+            analyzer=analyzer
+        )
+        
+        report = market_analyzer.run_morning_strategy()
+        
+        if report and notifier.is_available():
+            notifier.send_to_wechat(report)
+            logger.info("早盘策略已推送")
+            
+    except Exception as e:
+        logger.exception(f"早盘任务失败: {e}")
 
 
 def run_market_review(notifier: NotificationService, analyzer=None, search_service=None) -> Optional[str]:
@@ -773,7 +798,7 @@ def main() -> int:
     
     logger.info("=" * 60)
     logger.info("A股自选股智能分析系统 启动")
-    logger.info(f"运行时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"运行时间: {datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}")
     logger.info("=" * 60)
     
     # 验证配置
@@ -788,24 +813,29 @@ def main() -> int:
         logger.info(f"使用命令行指定的股票列表: {stock_codes}")
     
     try:
+        # 初始化基础服务
+        notifier = NotificationService(config.wechat_webhook_url)
+        search_service = None
+        analyzer = None
+        
+        if config.tavily_api_keys or config.serpapi_keys:
+            search_service = SearchService(
+                tavily_keys=config.tavily_api_keys,
+                serpapi_keys=config.serpapi_keys
+            )
+        
+        if config.gemini_api_key:
+            analyzer = GeminiAnalyzer(api_key=config.gemini_api_key)
+
+        # 模式0: 早盘策略
+        if args.morning:
+            logger.info("模式: 早盘策略分析")
+            run_morning_job(notifier, analyzer, search_service)
+            return 0
+
         # 模式1: 仅大盘复盘
         if args.market_review:
             logger.info("模式: 仅大盘复盘")
-            notifier = NotificationService(config.wechat_webhook_url)
-            
-            # 初始化搜索服务和分析器（如果有配置）
-            search_service = None
-            analyzer = None
-            
-            if config.tavily_api_keys or config.serpapi_keys:
-                search_service = SearchService(
-                    tavily_keys=config.tavily_api_keys,
-                    serpapi_keys=config.serpapi_keys
-                )
-            
-            if config.gemini_api_key:
-                analyzer = GeminiAnalyzer(api_key=config.gemini_api_key)
-            
             run_market_review(notifier, analyzer, search_service)
             return 0
         

@@ -477,18 +477,6 @@ class GeminiAnalyzer:
     def _call_api_with_retry(self, prompt: str, generation_config: dict) -> str:
         """
         调用 Gemini API，带有重试和模型切换机制
-        
-        处理 429 限流错误：
-        1. 先指数退避重试
-        2. 多次失败后切换到备选模型
-        3. 备选模型也失败则抛出异常
-        
-        Args:
-            prompt: 提示词
-            generation_config: 生成配置
-            
-        Returns:
-            响应文本
         """
         config = get_config()
         max_retries = config.gemini_max_retries
@@ -499,10 +487,10 @@ class GeminiAnalyzer:
         
         for attempt in range(max_retries):
             try:
-                # 请求前增加延时（防止请求过快触发限流）
+                # 请求前增加延时
                 if attempt > 0:
-                    delay = base_delay * (2 ** (attempt - 1))  # 指数退避: 5, 10, 20, 40...
-                    delay = min(delay, 60)  # 最大60秒
+                    delay = base_delay * (2 ** (attempt - 1))
+                    delay = min(delay, 60)
                     logger.info(f"[LLM] 第 {attempt + 1} 次重试，等待 {delay:.1f} 秒...")
                     time.sleep(delay)
                 
@@ -521,25 +509,23 @@ class GeminiAnalyzer:
                 last_error = e
                 error_str = str(e)
                 
+                # 如果是 API Key 无效 (400)，直接抛出不再重试
+                if "API_KEY_INVALID" in error_str or "400" in error_str and "key" in error_str.lower():
+                    logger.error(f"[LLM] API Key 无效，停止尝试: {error_str[:100]}")
+                    raise e
+
                 # 检查是否是 429 限流错误
                 is_rate_limit = '429' in error_str or 'quota' in error_str.lower() or 'rate' in error_str.lower()
                 
                 if is_rate_limit:
                     logger.warning(f"[LLM] API 限流 (429)，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
-                    
-                    # 如果已经重试了一半次数且还没切换过备选模型，尝试切换
                     if attempt >= max_retries // 2 and not tried_fallback:
                         if self._switch_to_fallback_model():
                             tried_fallback = True
-                            logger.info("[LLM] 已切换到备选模型，继续重试")
-                        else:
-                            logger.warning("[LLM] 切换备选模型失败，继续使用当前模型重试")
                 else:
-                    # 非限流错误，记录并继续重试
                     logger.warning(f"[LLM] API 调用失败，第 {attempt + 1}/{max_retries} 次尝试: {error_str[:100]}")
         
-        # 所有重试都失败
-        raise last_error or Exception("Gemini API 调用失败，已达最大重试次数")
+        raise last_error or Exception("Gemini API 调用失败")
     
     def analyze(
         self, 
@@ -1030,6 +1016,110 @@ class GeminiAnalyzer:
             results.append(result)
         
         return results
+
+    def analyze_morning_strategy(self, news_text: str) -> str:
+        """
+        生成深度早盘操作建议（盘前推演 + 盯盘指南）
+        
+        Args:
+            news_text: 包含隔夜市场、政策、公司、市场复盘的综合情报
+            
+        Returns:
+            Markdown 格式的早盘作战计划
+        """
+        if not self._api_key:
+            return "AI 未配置，无法生成策略"
+            
+        from datetime import datetime, timezone, timedelta
+        bj_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
+        
+        # 专门的 System Prompt 用于早盘策略
+        strategy_system_prompt = """你是一位实战经验丰富的A股游资操盘手。
+你的任务是根据情报生成一份《早盘作战计划》。
+要求：
+1. 必须输出 Markdown 格式。
+2. 禁止输出 JSON。
+3. 语言风格干练、犀利，拒绝废话。
+4. 严格按照用户要求的六大维度进行分析。"""
+
+        prompt = f"""日期：{bj_time} (盘前 08:40)
+
+【综合情报池】
+{news_text}
+
+【分析框架】
+请严格按照以下六大维度进行深度推演：
+
+### 一、 🌍 隔夜与海外映射 (影响开盘情绪)
+*   **美股/中概**：纳指、金龙指数涨跌对A股科技/中概互联板块的映射。
+*   **A50/汇率**：富时A50夜盘涨跌对权重的指引；人民币汇率变动对外资流向的影响。
+*   **大宗商品**：原油、黄金、铜等价格波动对资源股的驱动。
+
+### 二、 📢 政策与宏观定调 (决定板块方向)
+*   **头版/要闻**：官媒定调及一行两会动态。
+*   **行业重磅**：是否有盘前突发利好（如新能源、AI、消费等新规）。
+
+### 三、 🏢 公告掘金与避雷 (驱动个股)
+*   **业绩/合同**：超预期利好个股。
+*   **利空避险**：减持、立案调查等需规避标的。
+
+### 四、 📈 市场状态推演 (判断资金与趋势)
+*   **情绪预判**：基于昨日涨跌停家数、连板高度，预判今日情绪是修复还是分歧。
+*   **主线判断**：当前市场核心主线是什么？资金是在进攻还是撤退？
+
+### 五、 ⏰ 盘中盯盘指南 (9:15-10:00 关键动作)
+*   **集合竞价 (9:15-9:25)**：重点观察哪些板块/个股的核按钮或一字板？
+*   **开盘半小时 (9:30-10:00)**：
+    *   **量能**：需达到多少金额才算有效放量？
+    *   **北向**：流出多少亿需警惕？
+    *   **板块**：主力资金若攻击XX板块，可跟随；若拉升XX板块，需防诱多。
+
+### 六、 📝 总结与策略 (核心结论)
+*   **今日基调**：高开低走/低开高走/震荡？
+*   **核心逻辑**：政策驱动？业绩驱动？海外映射？
+*   **仓位建议**：具体几成仓？激进型 vs 稳健型策略。
+
+---
+**输出要求**：
+1.  **实战第一**：不要废话，直接给判断和点位。
+2.  **高亮重点**：关键点位、板块名称用 **加粗** 显示。
+3.  **风险前置**：对于可能的风险（如高位股退潮、外围大跌）要放在醒目位置。
+4.  **格式规范**：使用标准的 Markdown 格式。
+"""
+        
+        try:
+            import google.generativeai as genai
+            
+            # 使用新的模型实例，不带个股分析的 System Instruction
+            config = get_config()
+            model_name = config.gemini_model
+            
+            strategy_model = genai.GenerativeModel(
+                model_name=model_name,
+                system_instruction=strategy_system_prompt
+            )
+            
+            # 增加 token 限制以容纳更详细的分析
+            generation_config = {
+                "temperature": 0.4, # 降低随机性，追求准确
+                "max_output_tokens": 2048,
+            }
+            
+            # 直接调用新模型
+            response = strategy_model.generate_content(
+                prompt,
+                generation_config=generation_config,
+                request_options={"timeout": 120}
+            )
+            
+            if response and response.text:
+                return response.text
+            else:
+                return "生成失败：API 返回空内容"
+                
+        except Exception as e:
+            logger.error(f"生成早盘策略失败: {e}")
+            return f"生成策略时发生错误: {e}"
 
 
 # 便捷函数

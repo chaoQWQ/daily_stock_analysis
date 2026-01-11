@@ -1,0 +1,48 @@
+name: 早盘策略分析
+
+on:
+  schedule:
+    # 北京时间 08:40 = UTC 00:40
+    - cron: '40 0 * * 1-5'
+  workflow_dispatch:  # 支持手动触发
+
+jobs:
+  morning_strategy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # 允许提交代码（如果需要保存报告）
+      
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        
+    - name: Run Morning Strategy
+      env:
+        # 必填配置
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+        STOCK_LIST: ${{ secrets.STOCK_LIST }}
+        
+        # 推荐配置
+        TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+        
+        # 可选配置
+        EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+        EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+        
+        # 系统配置
+        TZ: Asia/Shanghai
+      run: |
+        python main.py --morning

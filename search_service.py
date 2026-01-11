@@ -387,6 +387,41 @@ class SearchService:
         """检查是否有可用的搜索引擎"""
         return any(p.is_available for p in self._providers)
     
+    def _execute_search(self, query: str, max_results: int = 5) -> SearchResponse:
+        """
+        执行通用搜索（包含轮询和故障转移逻辑）
+        
+        Args:
+            query: 搜索关键词
+            max_results: 最大结果数
+            
+        Returns:
+            SearchResponse
+        """
+        logger.info(f"执行搜索: '{query}'")
+        
+        # 依次尝试各个搜索引擎
+        for provider in self._providers:
+            if not provider.is_available:
+                continue
+            
+            response = provider.search(query, max_results)
+            
+            if response.success and response.results:
+                logger.info(f"使用 {provider.name} 搜索成功")
+                return response
+            else:
+                logger.warning(f"{provider.name} 搜索失败: {response.error_message}，尝试下一个引擎")
+        
+        # 所有引擎都失败
+        return SearchResponse(
+            query=query,
+            results=[],
+            provider="None",
+            success=False,
+            error_message="所有搜索引擎都不可用或搜索失败"
+        )
+
     def search_stock_news(
         self,
         stock_code: str,
@@ -420,29 +455,58 @@ class SearchService:
         # 主查询：股票名称 + 核心关键词
         query = f"{stock_name} {stock_code} 股票 最新消息"
         
-        logger.info(f"搜索股票新闻: {stock_name}({stock_code})")
+        return self._execute_search(query, max_results)
+
+    def search_morning_news(self) -> List[Dict]:
+        """
+        搜索早盘前瞻所需的全方位情报（四大维度）
         
-        # 依次尝试各个搜索引擎
-        for provider in self._providers:
-            if not provider.is_available:
-                continue
-            
-            response = provider.search(query, max_results)
-            
-            if response.success and response.results:
-                logger.info(f"使用 {provider.name} 搜索成功")
-                return response
-            else:
-                logger.warning(f"{provider.name} 搜索失败: {response.error_message}，尝试下一个引擎")
+        维度：
+        1. 隔夜与海外：美股、中概、A50、汇率、大宗
+        2. 国内政策：头版头条、行业政策
+        3. 公司消息：公告精选
+        4. 市场状态：前日复盘
         
-        # 所有引擎都失败
-        return SearchResponse(
-            query=query,
-            results=[],
-            provider="None",
-            success=False,
-            error_message="所有搜索引擎都不可用或搜索失败"
-        )
+        Returns:
+            新闻结果列表
+        """
+        if not self.is_available:
+            return []
+            
+        # 获取北京时间日期
+        from datetime import datetime, timezone, timedelta
+        bj_now = datetime.now(timezone(timedelta(hours=8)))
+        date_str = bj_now.strftime('%m月%d日')
+        
+        # 构建四大维度的精准查询
+        queries = [
+            # 1. 隔夜与海外
+            f"隔夜美股收盘 纳斯达克 中国金龙指数 {date_str}",
+            f"富时A50期货夜盘收盘 {date_str}",
+            f"离岸人民币汇率 美元指数 最新 {date_str}",
+            f"国际原油 黄金 铜期货价格 {date_str}",
+            
+            # 2. 国内政策与宏观
+            f"证券报头版头条摘要 {date_str}",
+            f"国家发改委 央行 证监会 最新政策 {date_str}",
+            f"行业重磅利好政策 {date_str}",
+            
+            # 3. 公司层面
+            f"A股 上市公司 晚间公告精选 利好 利空 {date_str}",
+            
+            # 4. 市场复盘
+            f"昨日A股龙虎榜 机构游资动向 {date_str}"
+        ]
+        
+        all_results = []
+        # 使用 execute_search 内部方法，稍微减少 max_results 以免总数过多
+        for q in queries:
+            resp = self._execute_search(q, max_results=2)
+            if resp and resp.results:
+                # 为每个结果标记查询来源，方便后续分类（可选）
+                all_results.extend(resp.results)
+                
+        return all_results
     
     def search_stock_events(
         self,

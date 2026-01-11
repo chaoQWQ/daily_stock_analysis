@@ -12,7 +12,7 @@
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 
 import akshare as ak
@@ -115,7 +115,7 @@ class MarketAnalyzer:
         Returns:
             MarketOverview: 市场概览数据对象
         """
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d')
         overview = MarketOverview(date=today)
         
         # 1. 获取主要指数行情
@@ -250,16 +250,17 @@ class MarketAnalyzer:
         try:
             logger.info("[大盘] 获取北向资金...")
             
-            # 获取北向资金数据
-            df = ak.stock_hsgt_north_net_flow_in_em(symbol="北上")
+            # 使用历史数据接口 (stock_hsgt_hist_em) 获取最新一条
+            df = ak.stock_hsgt_hist_em(symbol="北上")
             
             if df is not None and not df.empty:
                 # 取最新一条数据
                 latest = df.iloc[-1]
-                if '当日净流入' in df.columns:
-                    overview.north_flow = float(latest['当日净流入']) / 1e8  # 转为亿元
-                elif '净流入' in df.columns:
-                    overview.north_flow = float(latest['净流入']) / 1e8
+                # 列名通常是 '日期', '北向资金净流入', ...
+                if '北向资金净流入' in df.columns:
+                    overview.north_flow = float(latest['北向资金净流入']) / 1e8  # 转为亿元
+                elif '当日净流入' in df.columns:
+                    overview.north_flow = float(latest['当日净流入']) / 1e8
                     
                 logger.info(f"[大盘] 北向资金净流入: {overview.north_flow:.2f}亿")
                 
@@ -278,7 +279,7 @@ class MarketAnalyzer:
             return []
         
         all_news = []
-        today = datetime.now()
+        today = datetime.now(timezone(timedelta(hours=8)))
         month_str = f"{today.year}年{today.month}月"
         
         # 多维度搜索
@@ -490,7 +491,7 @@ class MarketAnalyzer:
 市场有风险，投资需谨慎。以上数据仅供参考，不构成投资建议。
 
 ---
-*复盘时间: {datetime.now().strftime('%H:%M')}*
+*复盘时间: {datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M')}*
 """
         return report
     
@@ -515,6 +516,65 @@ class MarketAnalyzer:
         logger.info("========== 大盘复盘分析完成 ==========")
         
         return report
+
+    def run_morning_strategy(self) -> str:
+        """
+        执行早盘策略分析（08:40 执行）
+        """
+        logger.info("========== 开始早盘策略分析 ==========")
+        
+        if not self.search_service or not self.analyzer:
+            return "❌ 服务未配置，无法执行早盘分析"
+            
+        # 1. 获取前一交易日市场概览 (作为市场状态输入)
+        logger.info("[早盘] 获取前日市场复盘数据...")
+        try:
+            # 注意：get_market_overview 获取的是"今天"的数据
+            # 如果在盘前运行（8:40），取到的其实是昨天的收盘数据（如果接口没更新）
+            # 或者我们需要显式获取昨天的。Akshare 实时接口通常在盘前显示的是昨日收盘。
+            overview = self.get_market_overview()
+            
+            market_status = f"""
+【昨日市场复盘】
+- 涨跌统计：涨{overview.up_count} / 跌{overview.down_count} / 平{overview.flat_count}
+- 涨跌停：涨停{overview.limit_up_count}家 / 跌停{overview.limit_down_count}家
+- 成交额：{overview.total_amount:.0f}亿元
+- 北向资金：{overview.north_flow:+.2f}亿元
+- 领涨板块：{', '.join([s['name'] for s in overview.top_sectors[:3]])}
+- 领跌板块：{', '.join([s['name'] for s in overview.bottom_sectors[:3]])}
+"""
+        except Exception as e:
+            logger.warning(f"[早盘] 获取市场复盘数据失败: {e}")
+            market_status = "\n【昨日市场复盘】\n数据获取失败"
+
+        # 2. 搜索隔夜情报 (美股、A50、政策、公告)
+        logger.info("[早盘] 搜索隔夜市场情报...")
+        news_list = self.search_service.search_morning_news()
+        
+        # 整理新闻文本
+        news_text = ""
+        for i, n in enumerate(news_list[:10], 1): # 增加到10条
+            # 兼容 SearchResult 对象和字典
+            if hasattr(n, 'title'):
+                title = n.title or ''
+                snippet = n.snippet or ''
+            else:
+                title = n.get('title', '')
+                snippet = n.get('snippet', '')
+            
+            news_text += f"{i}. {title}\n   {snippet}\n"
+            
+        if not news_text:
+            news_text = "未搜索到有效新闻。"
+            
+        # 3. 合并情报池
+        full_context = f"{market_status}\n\n【隔夜与早盘情报】\n{news_text}"
+            
+        # 4. 生成策略
+        logger.info("[早盘] 生成作战计划...")
+        strategy = self.analyzer.analyze_morning_strategy(full_context)
+        
+        return strategy
 
 
 # 测试入口

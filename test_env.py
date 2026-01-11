@@ -26,7 +26,7 @@ import os
 import argparse
 import logging
 import sys
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timezone, timedelta
 from typing import Optional
 
 # 配置日志
@@ -337,7 +337,7 @@ def test_notification():
 
 这是一条来自 **A股自选股智能分析系统** 的测试消息。
 
-- 测试时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+- 测试时间: {datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}
 - 测试目的: 验证通知推送配置 (Webhook/Email)
 
 如果您收到此消息，说明通知功能配置正确 ✓"""
@@ -363,7 +363,7 @@ def run_all_tests():
     """运行所有测试"""
     print("\n" + "🚀" * 20)
     print("  A股自选股智能分析系统 - 环境验证")
-    print("  " + datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+    print("  " + datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S'))
     print("🚀" * 20)
     
     results = {}

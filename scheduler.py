@@ -18,7 +18,7 @@ import signal
 import sys
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
@@ -107,12 +107,12 @@ class Scheduler:
         
         try:
             logger.info("=" * 50)
-            logger.info(f"定时任务开始执行 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"定时任务开始执行 - {datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}")
             logger.info("=" * 50)
             
             self._task_callback()
             
-            logger.info(f"定时任务执行完成 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+            logger.info(f"定时任务执行完成 - {datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')}")
             
         except Exception as e:
             logger.exception(f"定时任务执行失败: {e}")
@@ -132,7 +132,7 @@ class Scheduler:
             time.sleep(30)  # 每30秒检查一次
             
             # 每小时打印一次心跳
-            if datetime.now().minute == 0 and datetime.now().second < 30:
+            if datetime.now(timezone(timedelta(hours=8))).minute == 0 and datetime.now(timezone(timedelta(hours=8))).second < 30:
                 logger.info(f"调度器运行中... 下次执行: {self._get_next_run_time()}")
         
         logger.info("调度器已停止")
@@ -176,7 +176,7 @@ if __name__ == "__main__":
     )
     
     def test_task():
-        print(f"任务执行中... {datetime.now()}")
+        print(f"任务执行中... {datetime.now(timezone(timedelta(hours=8)))}")
         time.sleep(2)
         print("任务完成!")
     
