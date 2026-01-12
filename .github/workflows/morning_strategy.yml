@@ -3,7 +3,7 @@ name: 早盘策略分析
 on:
   schedule:
     # 北京时间 10:35 = UTC 2:35
-    - cron: '35 2 * * 1-5'
+    - cron: '0 12 * * 1-5'
   workflow_dispatch:  # 支持手动触发
 
 jobs:
@@ -29,19 +29,30 @@ jobs:
         
     - name: Run Morning Strategy
       env:
-        # 必填配置
+       # Gemini AI
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
-        STOCK_LIST: ${{ secrets.STOCK_LIST }}
+        GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-3-flash-preview' }}
+        GEMINI_MODEL_FALLBACK: ${{ secrets.GEMINI_MODEL_FALLBACK || 'gemini-2.5-flash' }}
+        GEMINI_REQUEST_DELAY: '3.0'  # GitHub Actions 建议增加延时
         
-        # 推荐配置
+        # 数据源 (可选)
+        TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+        
+        # 搜索服务
         TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+        SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
         
-        # 可选配置
+        # 邮件配置
         EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+        EMAIL_RECEIVER: ${{ secrets.EMAIL_SENDER }}
         EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
-        EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+        # 自选股列表 (从 secrets 或使用默认值)
+        STOCK_LIST: ${{ secrets.STOCK_LIST || '600519' }}
         
+        # 其他配置
+        LOG_LEVEL: INFO
+        DATA_DAYS: 60
+        MAX_CONCURRENT: 3
         # 系统配置
         TZ: Asia/Shanghai
       run: |
