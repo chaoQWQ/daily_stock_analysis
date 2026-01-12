@@ -2,8 +2,7 @@ name: 早盘策略分析
 
 on:
   schedule:
-    # 北京时间 10:35 = UTC 2:35
-    - cron: '0 12 * * 1-5'
+    - cron: '0 10 * * 1-5'
   workflow_dispatch:  # 支持手动触发
 
 jobs:
