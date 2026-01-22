@@ -763,7 +763,23 @@ class GeminiAnalyzer:
 **风险因素**：
 {chr(10).join('- ' + r for r in trend.get('risk_factors', ['无'])) if trend.get('risk_factors') else '- 无'}
 """
-        
+
+        # 添加板块/概念信息（新增）
+        if 'sector_info' in context:
+            sector = context['sector_info']
+            industry = sector.get('industry', '未知')
+            concepts = sector.get('concepts', [])
+            concepts_str = '、'.join(concepts[:5]) if concepts else '无'
+            prompt += f"""
+### 🏷️ 板块/概念信息
+| 项目 | 内容 |
+|------|------|
+| **所属行业** | {industry} |
+| **关联概念** | {concepts_str} |
+
+> 💡 提示：请结合板块/概念动态分析该股票受到的行业政策、国际政经人物（如马斯克、特朗普等）言行的影响。
+"""
+
         # 添加昨日对比数据
         if 'yesterday' in context:
             volume_change = context.get('volume_change_ratio', 'N/A')
@@ -785,6 +801,9 @@ class GeminiAnalyzer:
 1. 🚨 **风险警报**：减持、处罚、利空
 2. 🎯 **利好催化**：业绩、合同、政策
 3. 📊 **业绩预期**：年报预告、业绩快报
+4. 🏷️ **板块动态**：所属板块/概念的政策利好或利空
+5. 🌍 **国际政经**：马斯克、特朗普等关键人物言行对行业的影响
+6. 🔗 **产业链动态**：上下游供应链的重要消息
 
 ```
 {news_context}

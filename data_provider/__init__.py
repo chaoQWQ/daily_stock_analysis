@@ -11,7 +11,7 @@
 """
 
 from .base import BaseFetcher, DataFetcherManager
-from .akshare_fetcher import AkshareFetcher
+from .akshare_fetcher import AkshareFetcher, RealtimeQuote, ChipDistribution, StockSectorInfo
 from .tushare_fetcher import TushareFetcher
 from .baostock_fetcher import BaostockFetcher
 from .yfinance_fetcher import YfinanceFetcher
@@ -20,6 +20,9 @@ __all__ = [
     'BaseFetcher',
     'DataFetcherManager',
     'AkshareFetcher',
+    'RealtimeQuote',
+    'ChipDistribution',
+    'StockSectorInfo',
     'TushareFetcher',
     'BaostockFetcher',
     'YfinanceFetcher',

@@ -43,7 +43,7 @@ from typing import List, Dict, Any, Optional, Tuple
 from config import get_config, Config
 from storage import get_db, DatabaseManager
 from data_provider import DataFetcherManager
-from data_provider.akshare_fetcher import AkshareFetcher, RealtimeQuote, ChipDistribution
+from data_provider.akshare_fetcher import AkshareFetcher, RealtimeQuote, ChipDistribution, StockSectorInfo
 from analyzer import GeminiAnalyzer, AnalysisResult, STOCK_NAME_MAP
 from notification import NotificationService, send_daily_report
 from search_service import SearchService, SearchResponse
@@ -215,25 +215,26 @@ class StockAnalysisPipeline:
     def analyze_stock(self, code: str) -> Optional[AnalysisResult]:
         """
         分析单只股票（增强版：含量比、换手率、筹码分析、多维度情报）
-        
+
         流程：
         1. 获取实时行情（量比、换手率）
         2. 获取筹码分布
-        3. 进行趋势分析（基于交易理念）
-        4. 多维度情报搜索（最新消息+风险排查+业绩预期）
-        5. 从数据库获取分析上下文
-        6. 调用 AI 进行综合分析
-        
+        3. 获取板块/概念信息（新增）
+        4. 进行趋势分析（基于交易理念）
+        5. 多维度情报搜索（含板块、国际政经、产业链）
+        6. 从数据库获取分析上下文
+        7. 调用 AI 进行综合分析
+
         Args:
             code: 股票代码
-            
+
         Returns:
             AnalysisResult 或 None（如果分析失败）
         """
         try:
             # 获取股票名称（优先从实时行情获取真实名称）
             stock_name = STOCK_NAME_MAP.get(code, '')
-            
+
             # Step 1: 获取实时行情（量比、换手率等）
             realtime_quote: Optional[RealtimeQuote] = None
             try:
@@ -246,11 +247,11 @@ class StockAnalysisPipeline:
                               f"量比={realtime_quote.volume_ratio}, 换手率={realtime_quote.turnover_rate}%")
             except Exception as e:
                 logger.warning(f"[{code}] 获取实时行情失败: {e}")
-            
+
             # 如果还是没有名称，使用代码作为名称
             if not stock_name:
                 stock_name = f'股票{code}'
-            
+
             # Step 2: 获取筹码分布
             chip_data: Optional[ChipDistribution] = None
             try:
@@ -260,8 +261,21 @@ class StockAnalysisPipeline:
                               f"90%集中度={chip_data.concentration_90:.2%}")
             except Exception as e:
                 logger.warning(f"[{code}] 获取筹码分布失败: {e}")
-            
-            # Step 3: 趋势分析（基于交易理念）
+
+            # Step 3: 获取板块/概念信息（新增）
+            sector_info: Optional[StockSectorInfo] = None
+            industry = ""
+            concepts = []
+            try:
+                sector_info = self.akshare_fetcher.get_stock_sectors(code)
+                if sector_info:
+                    industry = sector_info.industry
+                    concepts = sector_info.concepts
+                    logger.info(f"[{code}] 板块信息: 行业={industry}, 概念={concepts}")
+            except Exception as e:
+                logger.warning(f"[{code}] 获取板块信息失败: {e}")
+
+            # Step 4: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
             try:
                 # 获取历史数据进行趋势分析
@@ -276,19 +290,21 @@ class StockAnalysisPipeline:
                                   f"买入信号={trend_result.buy_signal.value}, 评分={trend_result.signal_score}")
             except Exception as e:
                 logger.warning(f"[{code}] 趋势分析失败: {e}")
-            
-            # Step 4: 多维度情报搜索（最新消息+风险排查+业绩预期）
+
+            # Step 5: 多维度情报搜索（增强版：含板块、国际政经、产业链）
             news_context = None
             if self.search_service.is_available:
                 logger.info(f"[{code}] 开始多维度情报搜索...")
-                
-                # 使用多维度搜索（最多3次搜索）
+
+                # 使用增强版多维度搜索（传入行业和概念信息）
                 intel_results = self.search_service.search_comprehensive_intel(
                     stock_code=code,
                     stock_name=stock_name,
-                    max_searches=3
+                    max_searches=6,  # 增加到6次搜索以覆盖新维度
+                    industry=industry,
+                    concepts=concepts
                 )
-                
+
                 # 格式化情报报告
                 if intel_results:
                     news_context = self.search_service.format_intel_report(intel_results, stock_name)
@@ -299,28 +315,29 @@ class StockAnalysisPipeline:
                     logger.debug(f"[{code}] 情报搜索结果:\n{news_context}")
             else:
                 logger.info(f"[{code}] 搜索服务不可用，跳过情报搜索")
-            
-            # Step 5: 获取分析上下文（技术面数据）
+
+            # Step 6: 获取分析上下文（技术面数据）
             context = self.db.get_analysis_context(code)
-            
+
             if context is None:
                 logger.warning(f"[{code}] 无法获取分析上下文，跳过分析")
                 return None
-            
-            # Step 6: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称）
+
+            # Step 7: 增强上下文数据（添加实时行情、筹码、趋势分析结果、股票名称、板块信息）
             enhanced_context = self._enhance_context(
-                context, 
-                realtime_quote, 
-                chip_data, 
+                context,
+                realtime_quote,
+                chip_data,
                 trend_result,
-                stock_name  # 传入股票名称
+                stock_name,
+                sector_info  # 新增：传入板块信息
             )
-            
-            # Step 7: 调用 AI 分析（传入增强的上下文和新闻）
+
+            # Step 8: 调用 AI 分析（传入增强的上下文和新闻）
             result = self.analyzer.analyze(enhanced_context, news_context=news_context)
-            
+
             return result
-            
+
         except Exception as e:
             logger.error(f"[{code}] 分析失败: {e}")
             logger.exception(f"[{code}] 详细错误信息:")
@@ -332,25 +349,27 @@ class StockAnalysisPipeline:
         realtime_quote: Optional[RealtimeQuote],
         chip_data: Optional[ChipDistribution],
         trend_result: Optional[TrendAnalysisResult],
-        stock_name: str = ""
+        stock_name: str = "",
+        sector_info: Optional[StockSectorInfo] = None
     ) -> Dict[str, Any]:
         """
         增强分析上下文
-        
-        将实时行情、筹码分布、趋势分析结果、股票名称添加到上下文中
-        
+
+        将实时行情、筹码分布、趋势分析结果、股票名称、板块信息添加到上下文中
+
         Args:
             context: 原始上下文
             realtime_quote: 实时行情数据
             chip_data: 筹码分布数据
             trend_result: 趋势分析结果
             stock_name: 股票名称
-            
+            sector_info: 板块/概念信息（新增）
+
         Returns:
             增强后的上下文
         """
         enhanced = context.copy()
-        
+
         # 添加股票名称
         if stock_name:
             enhanced['stock_name'] = stock_name
@@ -398,7 +417,14 @@ class StockAnalysisPipeline:
                 'signal_reasons': trend_result.signal_reasons,
                 'risk_factors': trend_result.risk_factors,
             }
-        
+
+        # 添加板块/概念信息（新增）
+        if sector_info:
+            enhanced['sector_info'] = {
+                'industry': sector_info.industry,
+                'concepts': sector_info.concepts,
+            }
+
         return enhanced
     
     def _describe_volume_ratio(self, volume_ratio: float) -> str:

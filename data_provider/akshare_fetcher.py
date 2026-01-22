@@ -23,7 +23,7 @@ import random
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 import pandas as pd
 from tenacity import (
@@ -187,6 +187,35 @@ _realtime_cache: Dict[str, Any] = {
     'timestamp': 0,
     'ttl': 60  # 60秒缓存有效期
 }
+
+# 缓存股票板块/概念数据（变化不频繁，缓存1天）
+_sector_cache: Dict[str, Dict[str, Any]] = {}
+_sector_cache_ttl = 86400  # 24小时缓存
+
+
+@dataclass
+class StockSectorInfo:
+    """
+    股票板块/概念信息
+
+    用于关联搜索和行业分析
+    """
+    code: str
+    name: str = ""
+    industry: str = ""                    # 所属行业
+    concepts: List[str] = field(default_factory=list)  # 所属概念列表
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            'code': self.code,
+            'name': self.name,
+            'industry': self.industry,
+            'concepts': self.concepts,
+        }
+
+    def get_top_concepts(self, n: int = 3) -> List[str]:
+        """获取前N个概念（用于搜索）"""
+        return self.concepts[:n] if self.concepts else []
 
 
 class AkshareFetcher(BaseFetcher):
@@ -540,8 +569,150 @@ class AkshareFetcher(BaseFetcher):
         
         # 获取筹码分布
         result['chip_distribution'] = self.get_chip_distribution(stock_code)
-        
+
         return result
+
+    def get_stock_sectors(self, stock_code: str) -> Optional[StockSectorInfo]:
+        """
+        获取个股所属的行业板块和概念板块
+
+        数据来源：
+        1. ak.stock_individual_info_em() - 获取个股详情（含行业分类）
+        2. 概念板块通过实时行情数据获取
+
+        Args:
+            stock_code: 股票代码
+
+        Returns:
+            StockSectorInfo 对象，获取失败返回 None
+        """
+        import akshare as ak
+
+        # 检查缓存
+        current_time = time.time()
+        cache_key = stock_code
+        if cache_key in _sector_cache:
+            cached = _sector_cache[cache_key]
+            if current_time - cached.get('timestamp', 0) < _sector_cache_ttl:
+                logger.debug(f"[缓存命中] 使用缓存的板块信息: {stock_code}")
+                return cached.get('data')
+
+        try:
+            # 防封禁策略
+            self._set_random_user_agent()
+            self._enforce_rate_limit()
+
+            logger.info(f"[API调用] ak.stock_individual_info_em(symbol={stock_code}) 获取个股详情...")
+
+            # 获取个股详情
+            df_info = ak.stock_individual_info_em(symbol=stock_code)
+
+            stock_name = ""
+            industry = ""
+
+            if df_info is not None and not df_info.empty:
+                # 解析个股信息（格式为 item, value 两列）
+                info_dict = {}
+                if '项目' in df_info.columns and '值' in df_info.columns:
+                    for _, row in df_info.iterrows():
+                        info_dict[row['项目']] = row['值']
+                elif 'item' in df_info.columns and 'value' in df_info.columns:
+                    for _, row in df_info.iterrows():
+                        info_dict[row['item']] = row['value']
+
+                stock_name = info_dict.get('股票简称', info_dict.get('名称', ''))
+                industry = info_dict.get('行业', info_dict.get('所属行业', ''))
+
+                logger.info(f"[API返回] 个股详情: {stock_name}, 行业={industry}")
+
+            # 获取概念板块
+            concepts = []
+            try:
+                self._enforce_rate_limit()
+                logger.info(f"[API调用] ak.stock_board_concept_cons_em() 获取概念板块...")
+
+                # 获取所有概念板块列表
+                df_concepts = ak.stock_board_concept_name_em()
+
+                if df_concepts is not None and not df_concepts.empty:
+                    # 遍历每个概念板块，查找包含该股票的板块
+                    # 注意：这是一个较慢的操作，只取前30个热门概念检查
+                    concept_names = df_concepts['板块名称'].head(50).tolist()
+
+                    for concept_name in concept_names[:30]:  # 限制检查数量
+                        try:
+                            # 防止请求过快
+                            time.sleep(0.3)
+                            df_cons = ak.stock_board_concept_cons_em(symbol=concept_name)
+                            if df_cons is not None and not df_cons.empty:
+                                if stock_code in df_cons['代码'].values:
+                                    concepts.append(concept_name)
+                                    logger.debug(f"[概念匹配] {stock_code} 属于概念: {concept_name}")
+                                    if len(concepts) >= 5:  # 最多获取5个概念
+                                        break
+                        except Exception as e:
+                            logger.debug(f"[概念检查] {concept_name} 检查失败: {e}")
+                            continue
+
+                    logger.info(f"[API返回] 概念板块: {concepts}")
+
+            except Exception as e:
+                logger.warning(f"[API警告] 获取概念板块失败: {e}")
+
+            # 如果概念获取失败，尝试从热门概念关键词匹配
+            if not concepts and industry:
+                concepts = self._infer_concepts_from_industry(industry)
+
+            # 创建结果对象
+            sector_info = StockSectorInfo(
+                code=stock_code,
+                name=stock_name,
+                industry=industry,
+                concepts=concepts,
+            )
+
+            # 更新缓存
+            _sector_cache[cache_key] = {
+                'data': sector_info,
+                'timestamp': current_time,
+            }
+
+            logger.info(f"[板块信息] {stock_code} {stock_name}: 行业={industry}, 概念={concepts}")
+            return sector_info
+
+        except Exception as e:
+            logger.error(f"[API错误] 获取 {stock_code} 板块信息失败: {e}")
+            return None
+
+    def _infer_concepts_from_industry(self, industry: str) -> List[str]:
+        """
+        根据行业推断可能的概念板块
+
+        用于概念板块获取失败时的降级处理
+        """
+        # 行业-概念映射表
+        industry_concept_map = {
+            '汽车': ['新能源汽车', '锂电池', '智能驾驶'],
+            '电子': ['芯片概念', '消费电子', '华为概念'],
+            '计算机': ['人工智能', '云计算', '数字经济'],
+            '通信': ['5G', '物联网', '数字经济'],
+            '电气设备': ['新能源', '储能', '光伏'],
+            '医药生物': ['创新药', '医疗器械', '中药'],
+            '食品饮料': ['白酒', '消费升级'],
+            '银行': ['金融科技', '数字货币'],
+            '房地产': ['房地产', '城市更新'],
+            '有色金属': ['锂电池', '稀土永磁', '新材料'],
+            '化工': ['新材料', '化工'],
+            '机械设备': ['机器人', '工业母机', '专精特新'],
+            '传媒': ['游戏', '元宇宙', 'AI应用'],
+            '国防军工': ['军工', '航空航天'],
+        }
+
+        for key, concepts in industry_concept_map.items():
+            if key in industry:
+                return concepts
+
+        return []
 
 
 if __name__ == "__main__":

@@ -23,6 +23,50 @@ from itertools import cycle
 logger = logging.getLogger(__name__)
 
 
+# ========== 国际政经人物-行业映射表 ==========
+# 用于根据行业查找相关的国际影响人物
+
+GLOBAL_INFLUENCERS = {
+    # 人物 -> 关联行业/关键词
+    '马斯克': ['新能源汽车', '特斯拉', '电动车', 'AI', '脑机接口', 'SpaceX', '星链', '推特', 'X'],
+    '特朗普': ['关税', '中美贸易', '半导体', '芯片', '制裁', '美股', '加密货币'],
+    '巴菲特': ['投资', '银行', '保险', '消费', '可口可乐', '苹果'],
+    '黄仁勋': ['AI', '英伟达', 'GPU', '芯片', '算力', '人工智能'],
+    '马化腾': ['腾讯', '游戏', '社交', '云计算', '微信'],
+    '马云': ['阿里巴巴', '电商', '蚂蚁', '金融科技'],
+    '雷军': ['小米', '手机', '智能家居', '新能源汽车'],
+    '任正非': ['华为', '5G', '芯片', '通信'],
+    '比尔盖茨': ['微软', 'AI', '新能源', '医疗'],
+    '扎克伯格': ['Meta', '元宇宙', 'VR', '社交'],
+}
+
+INDUSTRY_INFLUENCER_MAP = {
+    # 行业关键词 -> 相关人物
+    '新能源汽车': ['马斯克', '特朗普', '雷军'],
+    '汽车': ['马斯克', '雷军'],
+    '电动车': ['马斯克', '雷军'],
+    '半导体': ['黄仁勋', '特朗普', '任正非'],
+    '芯片': ['黄仁勋', '特朗普', '任正非'],
+    '人工智能': ['马斯克', '黄仁勋', '比尔盖茨'],
+    'AI': ['马斯克', '黄仁勋', '比尔盖茨', '扎克伯格'],
+    '互联网': ['马化腾', '马云', '扎克伯格'],
+    '游戏': ['马化腾'],
+    '电商': ['马云'],
+    '通信': ['任正非'],
+    '5G': ['任正非'],
+    '消费电子': ['雷军', '任正非'],
+    '手机': ['雷军', '任正非'],
+    '金融': ['巴菲特', '特朗普'],
+    '银行': ['巴菲特'],
+    '保险': ['巴菲特'],
+    '医药': ['比尔盖茨'],
+    '元宇宙': ['扎克伯格'],
+    '加密货币': ['马斯克', '特朗普'],
+    '光伏': ['特朗普'],  # 关税影响
+    '锂电池': ['马斯克', '特朗普'],
+}
+
+
 @dataclass
 class SearchResult:
     """搜索结果数据类"""
@@ -516,36 +560,36 @@ class SearchService:
     ) -> SearchResponse:
         """
         搜索股票特定事件（年报预告、减持等）
-        
+
         专门针对交易决策相关的重要事件进行搜索
-        
+
         Args:
             stock_code: 股票代码
             stock_name: 股票名称
             event_types: 事件类型列表
-            
+
         Returns:
             SearchResponse 对象
         """
         if event_types is None:
             event_types = ["年报预告", "减持公告", "业绩快报"]
-        
+
         # 构建针对性查询
         event_query = " OR ".join(event_types)
         query = f"{stock_name} ({event_query})"
-        
+
         logger.info(f"搜索股票事件: {stock_name}({stock_code}) - {event_types}")
-        
+
         # 依次尝试各个搜索引擎
         for provider in self._providers:
             if not provider.is_available:
                 continue
-            
+
             response = provider.search(query, max_results=5)
-            
+
             if response.success:
                 return response
-        
+
         return SearchResponse(
             query=query,
             results=[],
@@ -553,33 +597,161 @@ class SearchService:
             success=False,
             error_message="事件搜索失败"
         )
+
+    def search_sector_news(
+        self,
+        stock_name: str,
+        industry: str,
+        concepts: List[str],
+        max_results: int = 3
+    ) -> SearchResponse:
+        """
+        搜索板块/概念相关新闻
+
+        Args:
+            stock_name: 股票名称
+            industry: 所属行业
+            concepts: 概念板块列表
+            max_results: 最大结果数
+
+        Returns:
+            SearchResponse 对象
+        """
+        # 构建查询：优先使用概念，其次使用行业
+        if concepts:
+            # 取前2个概念
+            concept_str = " ".join(concepts[:2])
+            query = f"{concept_str} 板块 最新政策 利好 2026年"
+        elif industry:
+            query = f"{industry} 行业 最新政策 利好 2026年"
+        else:
+            query = f"{stock_name} 板块 行业 动态"
+
+        logger.info(f"[板块搜索] {stock_name}: query='{query}'")
+
+        return self._execute_search(query, max_results)
+
+    def search_global_impact(
+        self,
+        stock_name: str,
+        industry: str,
+        concepts: List[str],
+        max_results: int = 3
+    ) -> SearchResponse:
+        """
+        搜索国际政经人物对行业的影响
+
+        根据行业/概念匹配相关的国际人物，搜索其最新言行对行业的影响
+
+        Args:
+            stock_name: 股票名称
+            industry: 所属行业
+            concepts: 概念板块列表
+            max_results: 最大结果数
+
+        Returns:
+            SearchResponse 对象
+        """
+        # 根据行业/概念找到相关人物
+        related_influencers = set()
+
+        # 从行业匹配
+        if industry:
+            for key, influencers in INDUSTRY_INFLUENCER_MAP.items():
+                if key in industry or industry in key:
+                    related_influencers.update(influencers)
+
+        # 从概念匹配
+        for concept in concepts:
+            for key, influencers in INDUSTRY_INFLUENCER_MAP.items():
+                if key in concept or concept in key:
+                    related_influencers.update(influencers)
+
+        # 如果没有匹配到，使用默认的重要人物
+        if not related_influencers:
+            related_influencers = {'马斯克', '特朗普'}
+
+        # 取前2个人物构建查询
+        influencer_list = list(related_influencers)[:2]
+        influencer_str = " ".join(influencer_list)
+
+        # 构建查询
+        if industry:
+            query = f"{influencer_str} {industry} 影响 政策 最新 2026年"
+        else:
+            query = f"{influencer_str} 中国 A股 影响 最新 2026年"
+
+        logger.info(f"[国际政经搜索] {stock_name}: 关联人物={influencer_list}, query='{query}'")
+
+        return self._execute_search(query, max_results)
+
+    def search_industry_chain(
+        self,
+        stock_name: str,
+        industry: str,
+        max_results: int = 3
+    ) -> SearchResponse:
+        """
+        搜索产业链上下游动态
+
+        Args:
+            stock_name: 股票名称
+            industry: 所属行业
+            max_results: 最大结果数
+
+        Returns:
+            SearchResponse 对象
+        """
+        if not industry:
+            return SearchResponse(
+                query="",
+                results=[],
+                provider="None",
+                success=False,
+                error_message="行业信息缺失，无法搜索产业链"
+            )
+
+        # 构建产业链查询
+        query = f"{stock_name} {industry} 产业链 上下游 供应链 最新动态 2026年"
+
+        logger.info(f"[产业链搜索] {stock_name}: query='{query}'")
+
+        return self._execute_search(query, max_results)
     
     def search_comprehensive_intel(
         self,
         stock_code: str,
         stock_name: str,
-        max_searches: int = 3
+        max_searches: int = 6,
+        industry: str = "",
+        concepts: Optional[List[str]] = None
     ) -> Dict[str, SearchResponse]:
         """
-        多维度情报搜索（同时使用多个引擎、多个维度）
-        
+        多维度情报搜索（增强版：含板块、国际政经、产业链）
+
         搜索维度：
         1. 最新消息 - 近期新闻动态
         2. 风险排查 - 减持、处罚、利空
         3. 业绩预期 - 年报预告、业绩快报
-        
+        4. 板块动态 - 所属板块/概念的政策和消息（新增）
+        5. 国际政经 - 马斯克、特朗普等关键人物影响（新增）
+        6. 产业链动态 - 上下游供应链消息（新增）
+
         Args:
             stock_code: 股票代码
             stock_name: 股票名称
-            max_searches: 最大搜索次数
-            
+            max_searches: 最大搜索次数（默认6次）
+            industry: 所属行业（可选）
+            concepts: 概念板块列表（可选）
+
         Returns:
             {维度名称: SearchResponse} 字典
         """
         results = {}
         search_count = 0
-        
-        # 定义搜索维度
+        concepts = concepts or []
+
+        # 定义搜索维度（按重要性排序）
         search_dimensions = [
             {
                 'name': 'latest_news',
@@ -587,7 +759,7 @@ class SearchService:
                 'desc': '最新消息'
             },
             {
-                'name': 'risk_check', 
+                'name': 'risk_check',
                 'query': f"{stock_name} 减持 处罚 利空 风险",
                 'desc': '风险排查'
             },
@@ -597,53 +769,87 @@ class SearchService:
                 'desc': '业绩预期'
             },
         ]
-        
-        logger.info(f"开始多维度情报搜索: {stock_name}({stock_code})")
-        
+
+        # 如果有行业/概念信息，添加新的搜索维度
+        if industry or concepts:
+            # 板块动态
+            search_dimensions.append({
+                'name': 'sector_news',
+                'type': 'sector',
+                'desc': '板块动态'
+            })
+            # 国际政经影响
+            search_dimensions.append({
+                'name': 'global_impact',
+                'type': 'global',
+                'desc': '国际政经'
+            })
+            # 产业链动态
+            if industry:
+                search_dimensions.append({
+                    'name': 'industry_chain',
+                    'type': 'chain',
+                    'desc': '产业链动态'
+                })
+
+        logger.info(f"开始多维度情报搜索: {stock_name}({stock_code}), 行业={industry}, 概念={concepts}")
+        logger.info(f"计划搜索维度: {[d['desc'] for d in search_dimensions[:max_searches]]}")
+
         # 轮流使用不同的搜索引擎
         provider_index = 0
-        
+
         for dim in search_dimensions:
             if search_count >= max_searches:
                 break
-            
+
             # 选择搜索引擎（轮流使用）
             available_providers = [p for p in self._providers if p.is_available]
             if not available_providers:
                 break
-            
+
             provider = available_providers[provider_index % len(available_providers)]
             provider_index += 1
-            
+
             logger.info(f"[情报搜索] {dim['desc']}: 使用 {provider.name}")
-            
-            response = provider.search(dim['query'], max_results=3)
+
+            # 根据维度类型执行不同的搜索
+            dim_type = dim.get('type', 'query')
+
+            if dim_type == 'sector':
+                response = self.search_sector_news(stock_name, industry, concepts, max_results=3)
+            elif dim_type == 'global':
+                response = self.search_global_impact(stock_name, industry, concepts, max_results=3)
+            elif dim_type == 'chain':
+                response = self.search_industry_chain(stock_name, industry, max_results=3)
+            else:
+                response = provider.search(dim['query'], max_results=3)
+
             results[dim['name']] = response
             search_count += 1
-            
+
             if response.success:
                 logger.info(f"[情报搜索] {dim['desc']}: 获取 {len(response.results)} 条结果")
             else:
                 logger.warning(f"[情报搜索] {dim['desc']}: 搜索失败 - {response.error_message}")
-            
+
             # 短暂延迟避免请求过快
             time.sleep(0.5)
-        
+
         return results
     
     def format_intel_report(self, intel_results: Dict[str, SearchResponse], stock_name: str) -> str:
         """
-        格式化情报搜索结果为报告
-        
+        格式化情报搜索结果为报告（增强版：含板块、国际政经、产业链）
+
         Args:
             intel_results: 多维度搜索结果
             stock_name: 股票名称
-            
+
         Returns:
             格式化的情报报告文本
         """
         lines = [f"【{stock_name} 情报搜索结果】"]
-        
+
         # 最新消息
         if 'latest_news' in intel_results:
             resp = intel_results['latest_news']
@@ -655,7 +861,7 @@ class SearchService:
                     lines.append(f"     {r.snippet[:100]}...")
             else:
                 lines.append("  未找到相关消息")
-        
+
         # 风险排查
         if 'risk_check' in intel_results:
             resp = intel_results['risk_check']
@@ -666,7 +872,7 @@ class SearchService:
                     lines.append(f"     {r.snippet[:100]}...")
             else:
                 lines.append("  未发现明显风险信号")
-        
+
         # 业绩预期
         if 'earnings' in intel_results:
             resp = intel_results['earnings']
@@ -677,7 +883,42 @@ class SearchService:
                     lines.append(f"     {r.snippet[:100]}...")
             else:
                 lines.append("  未找到业绩相关信息")
-        
+
+        # ========== 新增维度 ==========
+
+        # 板块动态
+        if 'sector_news' in intel_results:
+            resp = intel_results['sector_news']
+            lines.append(f"\n🏷️ 板块/概念动态 (来源: {resp.provider}):")
+            if resp.success and resp.results:
+                for i, r in enumerate(resp.results[:3], 1):
+                    lines.append(f"  {i}. {r.title}")
+                    lines.append(f"     {r.snippet[:100]}...")
+            else:
+                lines.append("  未找到板块相关信息")
+
+        # 国际政经影响
+        if 'global_impact' in intel_results:
+            resp = intel_results['global_impact']
+            lines.append(f"\n🌍 国际政经影响 (来源: {resp.provider}):")
+            if resp.success and resp.results:
+                for i, r in enumerate(resp.results[:3], 1):
+                    lines.append(f"  {i}. {r.title}")
+                    lines.append(f"     {r.snippet[:100]}...")
+            else:
+                lines.append("  未找到相关国际影响信息")
+
+        # 产业链动态
+        if 'industry_chain' in intel_results:
+            resp = intel_results['industry_chain']
+            lines.append(f"\n🔗 产业链动态 (来源: {resp.provider}):")
+            if resp.success and resp.results:
+                for i, r in enumerate(resp.results[:3], 1):
+                    lines.append(f"  {i}. {r.title}")
+                    lines.append(f"     {r.snippet[:100]}...")
+            else:
+                lines.append("  未找到产业链相关信息")
+
         return "\n".join(lines)
     
     def batch_search(
