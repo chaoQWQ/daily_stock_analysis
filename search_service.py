@@ -433,30 +433,53 @@ class SearchService:
     
     def _execute_search(self, query: str, max_results: int = 5) -> SearchResponse:
         """
-        执行通用搜索（包含轮询和故障转移逻辑）
-        
+        执行通用搜索（聚合模式：同时使用多个引擎并合并结果）
+
         Args:
             query: 搜索关键词
             max_results: 最大结果数
-            
+
         Returns:
-            SearchResponse
+            SearchResponse（聚合后的结果）
         """
         logger.info(f"执行搜索: '{query}'")
-        
-        # 依次尝试各个搜索引擎
+
+        all_results = []
+        providers_used = []
+        seen_urls = set()  # 用于去重
+
+        # 同时使用所有可用的搜索引擎
         for provider in self._providers:
             if not provider.is_available:
                 continue
-            
+
             response = provider.search(query, max_results)
-            
+
             if response.success and response.results:
-                logger.info(f"使用 {provider.name} 搜索成功")
-                return response
+                providers_used.append(provider.name)
+                # 去重：根据 URL 去重
+                for result in response.results:
+                    if result.url not in seen_urls:
+                        seen_urls.add(result.url)
+                        all_results.append(result)
+                logger.info(f"[聚合搜索] {provider.name} 返回 {len(response.results)} 条结果")
             else:
-                logger.warning(f"{provider.name} 搜索失败: {response.error_message}，尝试下一个引擎")
-        
+                logger.warning(f"[聚合搜索] {provider.name} 搜索失败: {response.error_message}")
+
+        # 如果有结果，返回聚合结果
+        if all_results:
+            # 按结果数量排序截取
+            all_results = all_results[:max_results]
+            provider_str = "+".join(providers_used)
+            logger.info(f"[聚合搜索] 完成，共 {len(all_results)} 条去重结果，来源: {provider_str}")
+
+            return SearchResponse(
+                query=query,
+                results=all_results,
+                provider=provider_str,
+                success=True,
+            )
+
         # 所有引擎都失败
         return SearchResponse(
             query=query,
