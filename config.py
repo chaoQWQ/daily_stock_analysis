@@ -131,10 +131,12 @@ class Config:
             stock_list = ['600519', '000001', '300750']
         
         # 解析搜索引擎 API Keys（支持多个 key，逗号分隔）
-        tavily_keys_str = os.getenv('TAVILY_API_KEYS', '')
+        # 兼容 TAVILY_API_KEYS 和 TAVILY_API_KEY 两种命名
+        tavily_keys_str = os.getenv('TAVILY_API_KEYS') or os.getenv('TAVILY_API_KEY', '')
         tavily_api_keys = [k.strip() for k in tavily_keys_str.split(',') if k.strip()]
-        
-        serpapi_keys_str = os.getenv('SERPAPI_KEYS', '')
+
+        # 兼容 SERPAPI_API_KEYS 和 SERPAPI_KEYS 两种命名
+        serpapi_keys_str = os.getenv('SERPAPI_API_KEYS') or os.getenv('SERPAPI_KEYS', '')
         serpapi_keys = [k.strip() for k in serpapi_keys_str.split(',') if k.strip()]
         
         return cls(
