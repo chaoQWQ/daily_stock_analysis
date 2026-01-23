@@ -81,6 +81,16 @@ class SearchResult:
         date_str = f" ({self.published_date})" if self.published_date else ""
         return f"【{self.source}】{self.title}{date_str}\n{self.snippet}"
 
+    def to_markdown(self) -> str:
+        """转换为 Markdown 格式（带链接）"""
+        date_str = f" ({self.published_date})" if self.published_date else ""
+        # 标题作为链接
+        if self.url:
+            title_link = f"[{self.title}]({self.url})"
+        else:
+            title_link = self.title
+        return f"**{title_link}**{date_str} - {self.source}\n{self.snippet}"
+
 
 @dataclass 
 class SearchResponse:
@@ -862,16 +872,30 @@ class SearchService:
     
     def format_intel_report(self, intel_results: Dict[str, SearchResponse], stock_name: str) -> str:
         """
-        格式化情报搜索结果为报告（增强版：含板块、国际政经、产业链）
+        格式化情报搜索结果为报告（增强版：含板块、国际政经、产业链，带链接）
 
         Args:
             intel_results: 多维度搜索结果
             stock_name: 股票名称
 
         Returns:
-            格式化的情报报告文本
+            格式化的情报报告文本（Markdown 格式，标题带链接）
         """
         lines = [f"【{stock_name} 情报搜索结果】"]
+
+        def format_result_item(idx: int, result: SearchResult) -> List[str]:
+            """格式化单条搜索结果（标题带链接）"""
+            date_str = f" [{result.published_date}]" if result.published_date else ""
+            # 标题作为 Markdown 链接
+            if result.url:
+                title_link = f"[{result.title}]({result.url})"
+            else:
+                title_link = result.title
+            snippet = result.snippet[:100] + "..." if len(result.snippet) > 100 else result.snippet
+            return [
+                f"  {idx}. {title_link}{date_str}",
+                f"     {snippet}"
+            ]
 
         # 最新消息
         if 'latest_news' in intel_results:
@@ -879,9 +903,7 @@ class SearchService:
             lines.append(f"\n📰 最新消息 (来源: {resp.provider}):")
             if resp.success and resp.results:
                 for i, r in enumerate(resp.results[:3], 1):
-                    date_str = f" [{r.published_date}]" if r.published_date else ""
-                    lines.append(f"  {i}. {r.title}{date_str}")
-                    lines.append(f"     {r.snippet[:100]}...")
+                    lines.extend(format_result_item(i, r))
             else:
                 lines.append("  未找到相关消息")
 
@@ -891,8 +913,7 @@ class SearchService:
             lines.append(f"\n⚠️ 风险排查 (来源: {resp.provider}):")
             if resp.success and resp.results:
                 for i, r in enumerate(resp.results[:3], 1):
-                    lines.append(f"  {i}. {r.title}")
-                    lines.append(f"     {r.snippet[:100]}...")
+                    lines.extend(format_result_item(i, r))
             else:
                 lines.append("  未发现明显风险信号")
 
@@ -902,8 +923,7 @@ class SearchService:
             lines.append(f"\n📊 业绩预期 (来源: {resp.provider}):")
             if resp.success and resp.results:
                 for i, r in enumerate(resp.results[:3], 1):
-                    lines.append(f"  {i}. {r.title}")
-                    lines.append(f"     {r.snippet[:100]}...")
+                    lines.extend(format_result_item(i, r))
             else:
                 lines.append("  未找到业绩相关信息")
 
@@ -915,8 +935,7 @@ class SearchService:
             lines.append(f"\n🏷️ 板块/概念动态 (来源: {resp.provider}):")
             if resp.success and resp.results:
                 for i, r in enumerate(resp.results[:3], 1):
-                    lines.append(f"  {i}. {r.title}")
-                    lines.append(f"     {r.snippet[:100]}...")
+                    lines.extend(format_result_item(i, r))
             else:
                 lines.append("  未找到板块相关信息")
 
@@ -926,8 +945,7 @@ class SearchService:
             lines.append(f"\n🌍 国际政经影响 (来源: {resp.provider}):")
             if resp.success and resp.results:
                 for i, r in enumerate(resp.results[:3], 1):
-                    lines.append(f"  {i}. {r.title}")
-                    lines.append(f"     {r.snippet[:100]}...")
+                    lines.extend(format_result_item(i, r))
             else:
                 lines.append("  未找到相关国际影响信息")
 
@@ -937,8 +955,7 @@ class SearchService:
             lines.append(f"\n🔗 产业链动态 (来源: {resp.provider}):")
             if resp.success and resp.results:
                 for i, r in enumerate(resp.results[:3], 1):
-                    lines.append(f"  {i}. {r.title}")
-                    lines.append(f"     {r.snippet[:100]}...")
+                    lines.extend(format_result_item(i, r))
             else:
                 lines.append("  未找到产业链相关信息")
 

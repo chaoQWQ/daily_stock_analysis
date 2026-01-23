@@ -690,7 +690,26 @@ def parse_arguments() -> argparse.Namespace:
         action='store_true',
         help='执行早盘策略分析（推荐每日08:40运行）'
     )
-    
+
+    parser.add_argument(
+        '--shaofu',
+        action='store_true',
+        help='执行 ShaoFu 选股策略（基于通达信优化战法）'
+    )
+
+    parser.add_argument(
+        '--shaofu-targets',
+        type=str,
+        default='沪深300',
+        help='ShaoFu 策略目标列表，逗号分隔（默认: 沪深300）。支持: 沪深300/中证500/上证50/板块名称'
+    )
+
+    parser.add_argument(
+        '--skip-download',
+        action='store_true',
+        help='跳过数据下载，使用本地缓存'
+    )
+
     return parser.parse_args()
 
 
@@ -702,15 +721,84 @@ def run_morning_job(notifier: NotificationService, analyzer=None, search_service
             search_service=search_service,
             analyzer=analyzer
         )
-        
+
         report = market_analyzer.run_morning_strategy()
-        
+
         if report and notifier.is_available():
             notifier.send_to_wechat(report)
             logger.info("早盘策略已推送")
-            
+
     except Exception as e:
         logger.exception(f"早盘任务失败: {e}")
+
+
+def run_shaofu_job(notifier: NotificationService, args) -> None:
+    """
+    执行 ShaoFu 选股策略任务
+
+    Args:
+        notifier: 通知服务
+        args: 命令行参数
+    """
+    logger.info("启动 ShaoFu 选股策略...")
+    try:
+        from shaofu_strategy import run_shaofu_strategy
+
+        # 解析目标列表
+        targets = [t.strip() for t in args.shaofu_targets.split(',') if t.strip()]
+        logger.info(f"目标列表: {targets}")
+
+        # 执行策略
+        results = run_shaofu_strategy(
+            targets=targets,
+            skip_download=args.skip_download,
+            data_dir="./data/shaofu"
+        )
+
+        if not results:
+            logger.warning("ShaoFu 策略未产生任何结果")
+            return
+
+        # 生成汇总报告
+        report_lines = ["## 📊 ShaoFu 选股策略报告\n"]
+
+        total_buy = 0
+        total_sell = 0
+
+        for result in results:
+            report_lines.append(result.get_summary())
+            report_lines.append("")
+            total_buy += len(result.buy_signals)
+            total_sell += len(result.sell_signals)
+
+        report_lines.insert(1, f"**汇总**: 买入信号 {total_buy} | 卖出信号 {total_sell}\n")
+
+        report = "\n".join(report_lines)
+
+        # 保存报告
+        from pathlib import Path
+        from datetime import datetime
+
+        report_dir = Path("./reports")
+        report_dir.mkdir(parents=True, exist_ok=True)
+        report_file = report_dir / f"shaofu_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+        report_file.write_text(report, encoding='utf-8')
+        logger.info(f"报告已保存: {report_file}")
+
+        # 推送通知
+        if notifier.is_available():
+            # 截断过长内容
+            wechat_report = report if len(report) <= 3800 else report[:3800] + "\n...(已截断)"
+            success = notifier.send_to_wechat(wechat_report)
+            if success:
+                logger.info("ShaoFu 策略报告已推送")
+            else:
+                logger.warning("推送失败")
+
+        logger.info("ShaoFu 策略执行完成")
+
+    except Exception as e:
+        logger.exception(f"ShaoFu 策略执行失败: {e}")
 
 
 def run_market_review(notifier: NotificationService, analyzer=None, search_service=None) -> Optional[str]:
@@ -857,6 +945,12 @@ def main() -> int:
         if args.morning:
             logger.info("模式: 早盘策略分析")
             run_morning_job(notifier, analyzer, search_service)
+            return 0
+
+        # 模式0.5: ShaoFu 选股策略
+        if args.shaofu:
+            logger.info("模式: ShaoFu 选股策略")
+            run_shaofu_job(notifier, args)
             return 0
 
         # 模式1: 仅大盘复盘

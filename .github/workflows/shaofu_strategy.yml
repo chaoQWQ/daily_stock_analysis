@@ -1,0 +1,95 @@
+name: ShaoFu 选股策略
+
+on:
+  schedule:
+    # 每天 UTC 07:30 (北京时间 15:30) 运行 - 收盘后分析
+    - cron: '30 7 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: '目标列表 (逗号分隔)'
+        required: false
+        default: 'csi300'
+        type: string
+      skip_download:
+        description: '跳过数据下载使用缓存'
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  shaofu-strategy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Create directories
+      run: |
+        mkdir -p data/shaofu logs reports
+
+    - name: Run ShaoFu Strategy
+      env:
+        # Gemini AI (可选，用于增强分析)
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+        # 企业微信推送
+        WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
+
+        # 邮件配置 (可选)
+        EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+        EMAIL_RECEIVER: ${{ secrets.EMAIL_SENDER }}
+        EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+
+        # 其他配置
+        LOG_LEVEL: INFO
+        TZ: Asia/Shanghai
+      run: |
+        # 获取目标参数
+        TARGETS="${{ github.event.inputs.targets || 'csi300' }}"
+        SKIP_FLAG="${{ github.event.inputs.skip_download == 'true' && '--skip-download' || '' }}"
+
+        echo "=========================================="
+        echo "ShaoFu 选股策略"
+        echo "目标: $TARGETS"
+        echo "时间: $(TZ='Asia/Shanghai' date '+%Y-%m-%d %H:%M:%S')"
+        echo "=========================================="
+
+        python main.py --shaofu --shaofu-targets "$TARGETS" $SKIP_FLAG
+
+    - name: Upload Results
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: shaofu-results-${{ github.run_number }}
+        path: |
+          reports/shaofu_*.md
+          data/shaofu/*.csv
+          logs/
+        retention-days: 30
+
+    - name: Show Results
+      if: always()
+      run: |
+        echo "=========================================="
+        echo "执行完成"
+        echo "=========================================="
+        if [ -d "reports" ]; then
+          echo "生成的报告:"
+          ls -la reports/shaofu_*.md 2>/dev/null || echo "无报告文件"
+          echo ""
+          echo "最新报告内容:"
+          cat reports/shaofu_*.md 2>/dev/null | head -100 || echo "无内容"
+        fi
