@@ -560,12 +560,19 @@ class GeminiAnalyzer:
         # 优先从上下文获取股票名称（由 main.py 传入）
         name = context.get('stock_name')
         if not name or name.startswith('股票'):
-            # 备选：从 realtime 中获取
+            # 备选 1：从 realtime 中获取
             if 'realtime' in context and context['realtime'].get('name'):
                 name = context['realtime']['name']
+            # 备选 2：从 sector_info 中获取
+            elif 'sector_info' in context and context['sector_info'].get('name'):
+                name = context['sector_info']['name']
             else:
                 # 最后从映射表获取
                 name = STOCK_NAME_MAP.get(code, f'股票{code}')
+        
+        # 如果获取到的还是代码（或者是空的），再尝试通过映射表补全
+        if name == code or not name:
+            name = STOCK_NAME_MAP.get(code, f'股票{code}')
         
         # 如果模型不可用，返回默认结果
         if not self.is_available():

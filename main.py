@@ -248,21 +248,7 @@ class StockAnalysisPipeline:
             except Exception as e:
                 logger.warning(f"[{code}] 获取实时行情失败: {e}")
 
-            # 如果还是没有名称，使用代码作为名称
-            if not stock_name:
-                stock_name = f'股票{code}'
-
-            # Step 2: 获取筹码分布
-            chip_data: Optional[ChipDistribution] = None
-            try:
-                chip_data = self.akshare_fetcher.get_chip_distribution(code)
-                if chip_data:
-                    logger.info(f"[{code}] 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
-                              f"90%集中度={chip_data.concentration_90:.2%}")
-            except Exception as e:
-                logger.warning(f"[{code}] 获取筹码分布失败: {e}")
-
-            # Step 3: 获取板块/概念信息（新增）
+            # Step 2: 获取板块/概念信息（同时作为获取名称的备选方案）
             sector_info: Optional[StockSectorInfo] = None
             industry = ""
             concepts = []
@@ -271,9 +257,22 @@ class StockAnalysisPipeline:
                 if sector_info:
                     industry = sector_info.industry
                     concepts = sector_info.concepts
-                    logger.info(f"[{code}] 板块信息: 行业={industry}, 概念={concepts}")
+                    # 如果实时行情没拿到名称，通过板块信息接口补全名称
+                    if not stock_name or stock_name.startswith('股票'):
+                        if sector_info.name:
+                            stock_name = sector_info.name
+                    logger.info(f"[{code}] 板块信息: 名称={stock_name}, 行业={industry}, 概念={concepts}")
             except Exception as e:
                 logger.warning(f"[{code}] 获取板块信息失败: {e}")
+
+            # 如果还是没有名称，使用代码作为名称
+            if not stock_name:
+                stock_name = f'股票{code}'
+
+            # Step 3: 获取筹码分布
+            chip_data: Optional[ChipDistribution] = None
+            try:
+                chip_data = self.akshare_fetcher.get_chip_distribution(code)
 
             # Step 4: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
