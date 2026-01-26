@@ -273,6 +273,11 @@ class StockAnalysisPipeline:
             chip_data: Optional[ChipDistribution] = None
             try:
                 chip_data = self.akshare_fetcher.get_chip_distribution(code)
+                if chip_data:
+                    logger.info(f"[{code}] 筹码分布: 获利比例={chip_data.profit_ratio:.1%}, "
+                              f"90%集中度={chip_data.concentration_90:.2%}")
+            except Exception as e:
+                logger.warning(f"[{code}] 获取筹码分布失败: {e}")
 
             # Step 4: 趋势分析（基于交易理念）
             trend_result: Optional[TrendAnalysisResult] = None
