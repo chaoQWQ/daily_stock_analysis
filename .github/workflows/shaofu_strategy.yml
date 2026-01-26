@@ -65,7 +65,7 @@ jobs:
         TZ: Asia/Shanghai
       run: |
         # 获取目标参数
-        TARGETS="${{ github.event.inputs.targets || 'csi300' }}"
+        TARGETS="${{ github.event.inputs.targets || 'all' }}"
         SKIP_FLAG="${{ github.event.inputs.skip_download == 'true' && '--skip-download' || '' }}"
 
         echo "=========================================="

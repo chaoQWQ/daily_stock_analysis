@@ -18,6 +18,8 @@ ShaoFu 选股策略模块
 
 import logging
 import os
+import time
+import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
@@ -29,6 +31,12 @@ import numpy as np
 from mytt import BBI, KDJ, MACD, BOLL, MA
 
 logger = logging.getLogger(__name__)
+
+# 请求配置
+REQUEST_DELAY_MIN = 0.5  # 最小请求延时(秒)
+REQUEST_DELAY_MAX = 1  # 最大请求延时(秒)
+MAX_RETRIES = 3  # 最大重试次数
+RETRY_DELAY = 3  # 重试延时(秒)
 
 
 @dataclass
@@ -194,48 +202,59 @@ class ShaoFuDataFetcher:
             return None
 
     def _fetch_single_stock(self, code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-        """获取单只股票历史数据"""
-        try:
-            df = self.ak.stock_zh_a_hist(
-                symbol=code,
-                period="daily",
-                start_date=start_date,
-                end_date=end_date,
-                adjust="qfq"
-            )
-
-            if df is None or df.empty:
-                return None
-
-            # 标准化列名
-            df = df.rename(columns={
-                '日期': 'date',
-                '开盘': 'open',
-                '收盘': 'close',
-                '最高': 'high',
-                '最低': 'low',
-                '成交量': 'volume',
-                '成交额': 'amount',
-            })
-
-            df['tic'] = code
-            df['tic_name'] = ""
-
-            # 获取股票名称
+        """获取单只股票历史数据（带重试机制）"""
+        for attempt in range(MAX_RETRIES):
             try:
-                info = self.ak.stock_individual_info_em(symbol=code)
-                if info is not None and not info.empty:
-                    name_row = info[info['item'] == '股票简称']
-                    if not name_row.empty:
-                        df['tic_name'] = name_row['value'].iloc[0]
-            except:
-                pass
+                # 添加随机延时，避免请求过于频繁
+                delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
+                time.sleep(delay)
 
-            return df
+                df = self.ak.stock_zh_a_hist(
+                    symbol=code,
+                    period="daily",
+                    start_date=start_date,
+                    end_date=end_date,
+                    adjust="qfq"
+                )
 
-        except Exception as e:
-            logger.debug(f"获取 {code} 数据异常: {e}")
-            return None
+                if df is None or df.empty:
+                    return None
+
+                # 标准化列名
+                df = df.rename(columns={
+                    '日期': 'date',
+                    '开盘': 'open',
+                    '收盘': 'close',
+                    '最高': 'high',
+                    '最低': 'low',
+                    '成交量': 'volume',
+                    '成交额': 'amount',
+                })
+
+                df['tic'] = code
+                df['tic_name'] = ""
+
+                # 获取股票名称（不重试，失败就跳过）
+                try:
+                    info = self.ak.stock_individual_info_em(symbol=code)
+                    if info is not None and not info.empty:
+                        name_row = info[info['item'] == '股票简称']
+                        if not name_row.empty:
+                            df['tic_name'] = name_row['value'].iloc[0]
+                except:
+                    pass
+
+                return df
+
+            except Exception as e:
+                if attempt < MAX_RETRIES - 1:
+                    logger.debug(f"获取 {code} 失败 (尝试 {attempt + 1}/{MAX_RETRIES}): {e}, {RETRY_DELAY}秒后重试...")
+                    time.sleep(RETRY_DELAY)
+                else:
+                    logger.debug(f"获取 {code} 最终失败: {e}")
+                    return None
+
+        return None
 
     def get_market_cap(self, code: str) -> float:
         """获取股票总市值(亿)"""
