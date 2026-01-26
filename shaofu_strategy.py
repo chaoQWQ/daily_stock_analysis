@@ -381,10 +381,11 @@ class ShaoFuDataFetcher:
                 mv_yi = row['总市值'] / 100000000
                 self._market_cap_cache[code] = mv_yi
 
-            # 排除 ST、退市、北交所
+            # 排除 ST、退市、北交所、科创板(688)、创业板(300)
             filtered_df = filtered_df[~filtered_df['名称'].str.contains('ST|退|N', na=False)]
-            filtered_df = filtered_df[~filtered_df['代码'].str.startswith(('4', '8'))]  # 排除北交所
-            logger.info(f"排除ST/退市/北交所后: {len(filtered_df)} 只")
+            # 4/8开头是北交所，688是科创板，300是创业板
+            filtered_df = filtered_df[~filtered_df['代码'].str.startswith(('4', '8', '688', '300'))]
+            logger.info(f"排除ST/退市/北交所/科创/创业板后: {len(filtered_df)} 只")
 
             stock_codes = filtered_df['代码'].tolist()
             stock_names = dict(zip(filtered_df['代码'], filtered_df['名称']))
