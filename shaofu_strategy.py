@@ -18,25 +18,98 @@ ShaoFu 选股策略模块
 
 import logging
 import os
-import time
-import random
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pandas as pd
 import numpy as np
+import requests
+from requests.sessions import Session
 
 from mytt import BBI, KDJ, MACD, BOLL, MA
 
 logger = logging.getLogger(__name__)
 
-# 请求配置
-REQUEST_DELAY_MIN = 0.5  # 最小请求延时(秒)
-REQUEST_DELAY_MAX = 1  # 最大请求延时(秒)
-MAX_RETRIES = 3  # 最大重试次数
-RETRY_DELAY = 3  # 重试延时(秒)
+# 保存原始的 request 方法
+_original_request = Session.request
+_cookie_injector_installed = False
+
+
+def _bypass_proxy():
+    """彻底移除系统代理设置，强制直连"""
+    for key in list(os.environ.keys()):
+        if "proxy" in key.lower():
+            del os.environ[key]
+
+    # 强制设置 NO_PROXY，这对 Windows 绕过注册表代理非常有效
+    os.environ['NO_PROXY'] = "*"
+    os.environ['no_proxy'] = "*"
+
+
+def _get_eastmoney_cookie() -> Optional[str]:
+    """获取东方财富 Cookie（从环境变量）"""
+    cookie = os.getenv("EASTMONEY_COOKIE", "")
+    if cookie and "在这里填入" not in cookie:
+        return cookie
+    return None
+
+
+def install_cookie_injector():
+    """
+    安装 Cookie 注入器 (Monkey Patch)
+    拦截所有 requests 请求，如果是发往东方财富的，就自动加上 Cookie
+    """
+    global _cookie_injector_installed
+
+    if _cookie_injector_installed:
+        return
+
+    # 0. 先执行代理绕过
+    _bypass_proxy()
+
+    # 1. 加载 Cookie
+    cookie_str = _get_eastmoney_cookie()
+    if not cookie_str:
+        logger.debug("未配置 EASTMONEY_COOKIE，跳过 Cookie 注入")
+        return
+
+    logger.info("已启用东方财富 Cookie 注入机制")
+
+    def patched_request(self, method, url, *args, **kwargs):
+        # 检查目标域名
+        try:
+            parsed_url = urlparse(url)
+            hostname = parsed_url.hostname
+
+            # 目标域名白名单
+            target_domains = ["eastmoney.com", "dfcfw.com"]
+
+            if hostname and any(domain in hostname for domain in target_domains):
+                # 获取现有的 headers，如果没有则创建一个
+                headers = kwargs.get("headers")
+                if headers is None:
+                    headers = {}
+                    kwargs["headers"] = headers
+
+                # 注入 Cookie
+                headers["Cookie"] = cookie_str
+
+                # 同时也注入 User-Agent，增加伪装性
+                if "User-Agent" not in headers:
+                    headers["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+        except Exception as e:
+            logger.warning(f"Cookie 注入过程发生异常 (不影响请求): {e}")
+
+        # 调用原始的 request 方法
+        return _original_request(self, method, url, *args, **kwargs)
+
+    # 替换 Session.request 方法
+    Session.request = patched_request
+    _cookie_injector_installed = True
 
 
 @dataclass
@@ -107,6 +180,9 @@ class ShaoFuDataFetcher:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self._ak = None
         self._market_cap_cache: Dict[str, float] = {}
+
+        # 安装 Cookie 注入器（防止被东方财富反爬拦截）
+        install_cookie_injector()
 
     @property
     def ak(self):
@@ -202,59 +278,48 @@ class ShaoFuDataFetcher:
             return None
 
     def _fetch_single_stock(self, code: str, start_date: str, end_date: str) -> Optional[pd.DataFrame]:
-        """获取单只股票历史数据（带重试机制）"""
-        for attempt in range(MAX_RETRIES):
+        """获取单只股票历史数据"""
+        try:
+            df = self.ak.stock_zh_a_hist(
+                symbol=code,
+                period="daily",
+                start_date=start_date,
+                end_date=end_date,
+                adjust="qfq"
+            )
+
+            if df is None or df.empty:
+                return None
+
+            # 标准化列名
+            df = df.rename(columns={
+                '日期': 'date',
+                '开盘': 'open',
+                '收盘': 'close',
+                '最高': 'high',
+                '最低': 'low',
+                '成交量': 'volume',
+                '成交额': 'amount',
+            })
+
+            df['tic'] = code
+            df['tic_name'] = ""
+
+            # 获取股票名称
             try:
-                # 添加随机延时，避免请求过于频繁
-                delay = random.uniform(REQUEST_DELAY_MIN, REQUEST_DELAY_MAX)
-                time.sleep(delay)
+                info = self.ak.stock_individual_info_em(symbol=code)
+                if info is not None and not info.empty:
+                    name_row = info[info['item'] == '股票简称']
+                    if not name_row.empty:
+                        df['tic_name'] = name_row['value'].iloc[0]
+            except:
+                pass
 
-                df = self.ak.stock_zh_a_hist(
-                    symbol=code,
-                    period="daily",
-                    start_date=start_date,
-                    end_date=end_date,
-                    adjust="qfq"
-                )
+            return df
 
-                if df is None or df.empty:
-                    return None
-
-                # 标准化列名
-                df = df.rename(columns={
-                    '日期': 'date',
-                    '开盘': 'open',
-                    '收盘': 'close',
-                    '最高': 'high',
-                    '最低': 'low',
-                    '成交量': 'volume',
-                    '成交额': 'amount',
-                })
-
-                df['tic'] = code
-                df['tic_name'] = ""
-
-                # 获取股票名称（不重试，失败就跳过）
-                try:
-                    info = self.ak.stock_individual_info_em(symbol=code)
-                    if info is not None and not info.empty:
-                        name_row = info[info['item'] == '股票简称']
-                        if not name_row.empty:
-                            df['tic_name'] = name_row['value'].iloc[0]
-                except:
-                    pass
-
-                return df
-
-            except Exception as e:
-                if attempt < MAX_RETRIES - 1:
-                    logger.debug(f"获取 {code} 失败 (尝试 {attempt + 1}/{MAX_RETRIES}): {e}, {RETRY_DELAY}秒后重试...")
-                    time.sleep(RETRY_DELAY)
-                else:
-                    logger.debug(f"获取 {code} 最终失败: {e}")
-                    return None
-
-        return None
+        except Exception as e:
+            logger.debug(f"获取 {code} 数据失败: {e}")
+            return None
 
     def get_market_cap(self, code: str) -> float:
         """获取股票总市值(亿)"""

@@ -1,7 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(python main.py --stocks 300750 --debug)"
-    ]
-  }
-}
