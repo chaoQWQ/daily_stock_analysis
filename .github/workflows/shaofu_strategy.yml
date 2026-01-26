@@ -47,6 +47,7 @@ jobs:
 
         # 数据源配置
         TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+        EASTMONEY_COOKIE: ${{ secrets.EASTMONEY_COOKIE }}
 
         # 搜索引擎配置
         TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
