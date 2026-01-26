@@ -43,6 +43,8 @@ class StockSignal:
     trigger_reason: str
     trend: int = 0  # 1=上涨, 0=震荡, -1=下跌
     bbi_derivative: float = 0.0
+    news_summary: str = ""  # 新闻资讯摘要
+    news_sentiment: str = ""  # 资讯情绪: 利好/利空/中性
 
 
 @dataclass
@@ -65,17 +67,19 @@ class ShaoFuStrategyResult:
         if self.buy_signals:
             lines.append(f"### 🟢 买入信号 ({len(self.buy_signals)})")
             for s in self.buy_signals:
-                lines.append(f"- **{s.name}** ({s.code}) | 收盘: {s.close} | KDJ.J: {s.kdj_j:.1f} | {s.trigger_reason}")
+                signal_line = f"- **{s.name}** ({s.code}) | 收盘: {s.close} | KDJ.J: {s.kdj_j:.1f} | {s.trigger_reason}"
+                # 添加资讯情绪标签
+                if s.news_sentiment:
+                    sentiment_emoji = {"利好": "📈", "利空": "📉", "中性": "➖"}.get(s.news_sentiment, "")
+                    signal_line += f" | {sentiment_emoji}{s.news_sentiment}"
+                lines.append(signal_line)
+                # 添加新闻摘要
+                if s.news_summary:
+                    lines.append(f"  > 📰 {s.news_summary}")
             lines.append("")
 
-        if self.sell_signals:
-            lines.append(f"### 🔴 卖出信号 ({len(self.sell_signals)})")
-            for s in self.sell_signals:
-                lines.append(f"- **{s.name}** ({s.code}) | 收盘: {s.close} | KDJ.J: {s.kdj_j:.1f} | {s.trigger_reason}")
-            lines.append("")
-
-        if not self.buy_signals and not self.sell_signals:
-            lines.append("*暂无明确交易信号*")
+        if not self.buy_signals:
+            lines.append("*暂无买入信号*")
 
         return "\n".join(lines)
 
@@ -590,10 +594,8 @@ class ShaoFuStrategyAnalyzer:
                     reason += "倍量堆积 "
                 if key_k_trigger.iloc[last_idx]:
                     reason += "关键突破 "
-            elif is_sell:
-                signal_val = False
-                reason = "超买回调"
 
+            # 只返回买入信号，忽略卖出信号
             if signal_val is None:
                 return None
 
@@ -667,10 +669,11 @@ class ShaoFuStrategy:
     # 全市场标识
     ALL_MARKET_KEYS = ['all', 'ALL', '全市场', '沪深A股', 'a股', 'A股']
 
-    def __init__(self, data_dir: str = "./data/shaofu"):
+    def __init__(self, data_dir: str = "./data/shaofu", search_service=None):
         self.data_dir = Path(data_dir)
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.fetcher = ShaoFuDataFetcher(str(self.data_dir))
+        self.search_service = search_service  # 搜索服务（可选）
 
     def run(
         self,
@@ -771,24 +774,111 @@ class ShaoFuStrategy:
         analyzer = ShaoFuStrategyAnalyzer(tech_df, market_caps)
         signals = analyzer.analyze()
 
-        # 5. 整理结果
+        # 5. 为买入信号股票获取新闻资讯
+        buy_signals = [s for s in signals if s.signal is True]
+        if buy_signals and self.search_service and self.search_service.is_available:
+            logger.info(f"为 {len(buy_signals)} 只买入信号股票获取新闻资讯...")
+            buy_signals = self._enrich_signals_with_news(buy_signals)
+
+        # 6. 整理结果
         result = ShaoFuStrategyResult(
             signals=signals,
-            buy_signals=[s for s in signals if s.signal is True],
+            buy_signals=buy_signals,
             sell_signals=[s for s in signals if s.signal is False],
             run_time=datetime.now(),
             target_name=target
         )
 
-        logger.info(f"[{target}] 分析完成: 买入信号 {len(result.buy_signals)}, 卖出信号 {len(result.sell_signals)}")
+        logger.info(f"[{target}] 分析完成: 买入信号 {len(result.buy_signals)}")
 
         return result
+
+    def _enrich_signals_with_news(self, signals: List[StockSignal]) -> List[StockSignal]:
+        """
+        为买入信号股票获取新闻资讯并进行情绪分析
+
+        Args:
+            signals: 买入信号列表
+
+        Returns:
+            添加了新闻摘要和情绪的信号列表
+        """
+        enriched_signals = []
+
+        for signal in signals:
+            try:
+                # 搜索该股票的最新新闻
+                query = f"{signal.name} {signal.code} 最新消息"
+                search_result = self.search_service.search(query, max_results=3)
+
+                if search_result.success and search_result.results:
+                    # 提取新闻摘要（取前2条）
+                    news_items = []
+                    for r in search_result.results[:2]:
+                        news_items.append(f"{r.title}")
+
+                    signal.news_summary = " | ".join(news_items)
+
+                    # 简单情绪分析（基于关键词）
+                    signal.news_sentiment = self._analyze_sentiment(search_result.results)
+
+                    logger.info(f"[{signal.code}] 资讯获取成功: {signal.news_sentiment}")
+                else:
+                    logger.debug(f"[{signal.code}] 未找到相关资讯")
+
+            except Exception as e:
+                logger.warning(f"[{signal.code}] 获取资讯失败: {e}")
+
+            enriched_signals.append(signal)
+
+        return enriched_signals
+
+    def _analyze_sentiment(self, results: list) -> str:
+        """
+        基于关键词的简单情绪分析
+
+        Args:
+            results: 搜索结果列表
+
+        Returns:
+            情绪标签: 利好/利空/中性
+        """
+        positive_keywords = [
+            '利好', '上涨', '突破', '新高', '增长', '盈利', '超预期',
+            '订单', '中标', '合作', '收购', '回购', '增持', '分红',
+            '涨停', '大涨', '暴涨', '创新高', '业绩增长', '扭亏'
+        ]
+        negative_keywords = [
+            '利空', '下跌', '暴跌', '跌停', '亏损', '减持', '质押',
+            '处罚', '调查', '退市', '预亏', '下滑', '违规', '诉讼',
+            '风险', '警示', '暂停', '终止', '负面', '爆雷'
+        ]
+
+        positive_count = 0
+        negative_count = 0
+
+        for r in results:
+            text = f"{r.title} {r.snippet}".lower()
+            for kw in positive_keywords:
+                if kw in text:
+                    positive_count += 1
+            for kw in negative_keywords:
+                if kw in text:
+                    negative_count += 1
+
+        if positive_count > negative_count + 1:
+            return "利好"
+        elif negative_count > positive_count + 1:
+            return "利空"
+        else:
+            return "中性"
 
 
 def run_shaofu_strategy(
     targets: List[str] = None,
     skip_download: bool = False,
-    data_dir: str = "./data/shaofu"
+    data_dir: str = "./data/shaofu",
+    search_service=None
 ) -> List[ShaoFuStrategyResult]:
     """
     ShaoFu 策略执行入口函数
@@ -797,6 +887,7 @@ def run_shaofu_strategy(
         targets: 目标列表，默认 ["沪深300"]
         skip_download: 是否跳过下载
         data_dir: 数据目录
+        search_service: 搜索服务实例（用于获取新闻资讯）
 
     Returns:
         策略结果列表
@@ -804,7 +895,7 @@ def run_shaofu_strategy(
     if targets is None:
         targets = ["沪深300"]
 
-    strategy = ShaoFuStrategy(data_dir=data_dir)
+    strategy = ShaoFuStrategy(data_dir=data_dir, search_service=search_service)
     return strategy.run(targets=targets, skip_download=skip_download)
 
 

@@ -45,6 +45,13 @@ jobs:
         # Gemini AI (可选，用于增强分析)
         GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
+        # 数据源配置
+        TUSHARE_TOKEN: ${{ secrets.TUSHARE_TOKEN }}
+
+        # 搜索引擎配置
+        TAVILY_API_KEYS: ${{ secrets.TAVILY_API_KEYS }}
+        SERPAPI_API_KEYS: ${{ secrets.SERPAPI_API_KEYS }}
+
         # 企业微信推送
         WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
 

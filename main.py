@@ -731,13 +731,14 @@ def run_morning_job(notifier: NotificationService, analyzer=None, search_service
         logger.exception(f"早盘任务失败: {e}")
 
 
-def run_shaofu_job(notifier: NotificationService, args) -> None:
+def run_shaofu_job(notifier: NotificationService, args, search_service=None) -> None:
     """
     执行 ShaoFu 选股策略任务
 
     Args:
         notifier: 通知服务
         args: 命令行参数
+        search_service: 搜索服务（用于获取新闻资讯）
     """
     logger.info("启动 ShaoFu 选股策略...")
     try:
@@ -747,11 +748,12 @@ def run_shaofu_job(notifier: NotificationService, args) -> None:
         targets = [t.strip() for t in args.shaofu_targets.split(',') if t.strip()]
         logger.info(f"目标列表: {targets}")
 
-        # 执行策略
+        # 执行策略（传入搜索服务）
         results = run_shaofu_strategy(
             targets=targets,
             skip_download=args.skip_download,
-            data_dir="./data/shaofu"
+            data_dir="./data/shaofu",
+            search_service=search_service
         )
 
         if not results:
@@ -762,15 +764,13 @@ def run_shaofu_job(notifier: NotificationService, args) -> None:
         report_lines = ["## 📊 ShaoFu 选股策略报告\n"]
 
         total_buy = 0
-        total_sell = 0
 
         for result in results:
             report_lines.append(result.get_summary())
             report_lines.append("")
             total_buy += len(result.buy_signals)
-            total_sell += len(result.sell_signals)
 
-        report_lines.insert(1, f"**汇总**: 买入信号 {total_buy} | 卖出信号 {total_sell}\n")
+        report_lines.insert(1, f"**汇总**: 买入信号 {total_buy}\n")
 
         report = "\n".join(report_lines)
 
@@ -949,7 +949,7 @@ def main() -> int:
         # 模式0.5: ShaoFu 选股策略
         if args.shaofu:
             logger.info("模式: ShaoFu 选股策略")
-            run_shaofu_job(notifier, args)
+            run_shaofu_job(notifier, args, search_service)
             return 0
 
         # 模式1: 仅大盘复盘
