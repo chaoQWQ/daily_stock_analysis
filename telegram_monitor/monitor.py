@@ -4,10 +4,10 @@
 Telegram 监听主调度器
 ===================================
 
-职责：
-1. 协调 客户端 → 过滤器 → 分析器 → 推送 的完整流程
-2. 管理消息队列和汇总推送
-3. 控制频率和限流
+核心逻辑（v2）：
+1. 所有消息先入队列（排除广告）
+2. 每 N 分钟批量发给 Gemini 分析
+3. 只推送有价值的消息（影响程度 >= 阈值）
 """
 
 import asyncio
@@ -15,7 +15,7 @@ import logging
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
-from typing import List, Optional, Callable, Dict, Any
+from typing import List, Optional, Dict, Any
 
 from telethon.tl.types import Channel, Message
 
@@ -36,8 +36,7 @@ class QueuedMessage:
     channel_title: str
     channel_id: int
     timestamp: datetime
-    filter_result: FilterResult
-    analysis_result: Optional[NewsImpactResult] = None
+    filter_result: Optional[FilterResult] = None
 
 
 @dataclass
@@ -45,66 +44,66 @@ class MonitorStats:
     """监控统计"""
     start_time: datetime = field(default_factory=lambda: datetime.now(timezone(timedelta(hours=8))))
     total_messages: int = 0
-    high_impact_count: int = 0
-    medium_impact_count: int = 0
-    low_impact_count: int = 0
+    queued_count: int = 0
     excluded_count: int = 0
-    push_count: int = 0
+    analyzed_count: int = 0
+    pushed_count: int = 0
+    valuable_count: int = 0  # AI 判定有价值的消息数
     error_count: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典"""
         runtime = datetime.now(timezone(timedelta(hours=8))) - self.start_time
         return {
             'runtime_seconds': int(runtime.total_seconds()),
             'total_messages': self.total_messages,
-            'high_impact_count': self.high_impact_count,
-            'medium_impact_count': self.medium_impact_count,
-            'low_impact_count': self.low_impact_count,
+            'queued_count': self.queued_count,
             'excluded_count': self.excluded_count,
-            'push_count': self.push_count,
+            'analyzed_count': self.analyzed_count,
+            'valuable_count': self.valuable_count,
+            'pushed_count': self.pushed_count,
             'error_count': self.error_count,
         }
 
 
 class TelegramMonitor:
     """
-    Telegram 频道监听主调度器
+    Telegram 频道监听主调度器（v2）
 
-    完整流程：
-    1. 监听 Telegram 频道消息
-    2. 过滤器筛选相关消息
-    3. AI 分析消息影响
-    4. 实时推送高影响消息，汇总推送中等影响消息
+    核心流程：
+    1. 收到消息 → 简单过滤（排除广告）→ 入队列
+    2. 每 N 分钟 → 批量取出队列 → Gemini 分析 → 筛选有价值的 → 推送
 
     使用方式：
-        monitor = TelegramMonitor()
+        monitor = TelegramMonitor(batch_interval_minutes=5)
         await monitor.start()
         await monitor.run()
     """
 
+    # AI 分析影响程度阈值（1-10），>= 此值才推送
+    IMPACT_THRESHOLD = 4
+
     def __init__(
         self,
         channel_ids: Optional[List[int]] = None,
-        summary_interval_minutes: int = 60,
-        max_queue_size: int = 100,
-        hourly_push_limit: int = 20,
+        batch_interval_minutes: int = 5,
+        max_queue_size: int = 200,
+        hourly_push_limit: int = 30,
         debug: bool = False
     ):
         """
         初始化监听器
 
         Args:
-            channel_ids: 要监听的频道 ID 列表（默认从配置读取）
-            summary_interval_minutes: 汇总推送间隔（分钟）
+            channel_ids: 要监听的频道 ID 列表
+            batch_interval_minutes: 批量分析间隔（分钟），默认 5 分钟
             max_queue_size: 消息队列最大长度
-            hourly_push_limit: 每小时最大推送次数（防刷屏）
+            hourly_push_limit: 每小时最大推送次数
             debug: 调试模式
         """
         config = get_config()
 
         self._channel_ids = channel_ids or config.telegram_channels
-        self._summary_interval = summary_interval_minutes
+        self._batch_interval = batch_interval_minutes
         self._max_queue_size = max_queue_size
         self._hourly_limit = hourly_push_limit
         self._debug = debug
@@ -115,7 +114,7 @@ class TelegramMonitor:
         self._analyzer = TelegramNewsAnalyzer()
         self._notifier = NotificationService()
 
-        # 消息队列（用于汇总推送）
+        # 消息队列
         self._message_queue: deque = deque(maxlen=max_queue_size)
 
         # 推送频率控制
@@ -126,27 +125,22 @@ class TelegramMonitor:
 
         # 运行状态
         self._running = False
-        self._summary_task: Optional[asyncio.Task] = None
+        self._batch_task: Optional[asyncio.Task] = None
 
         logger.info(
             f"Telegram 监听器初始化完成: "
             f"频道数={len(self._channel_ids)}, "
-            f"汇总间隔={summary_interval_minutes}分钟"
+            f"批量分析间隔={batch_interval_minutes}分钟, "
+            f"影响阈值={self.IMPACT_THRESHOLD}"
         )
 
     async def start(self) -> bool:
-        """
-        启动监听器
-
-        Returns:
-            是否成功启动
-        """
+        """启动监听器"""
         if self._running:
             logger.warning("监听器已在运行")
             return True
 
         try:
-            # 初始化 Telegram 客户端
             self._client = TelegramClientWrapper()
             success = await self._client.start()
 
@@ -154,7 +148,6 @@ class TelegramMonitor:
                 logger.error("Telegram 客户端启动失败")
                 return False
 
-            # 订阅频道
             subscribed = await self._client.subscribe_channels(
                 self._channel_ids,
                 self._on_new_message
@@ -175,24 +168,17 @@ class TelegramMonitor:
             return False
 
     async def run(self):
-        """
-        运行监听器（阻塞式）
-
-        包括：
-        1. 消息监听循环
-        2. 定时汇总推送任务
-        """
+        """运行监听器（阻塞式）"""
         if not self._running:
             logger.error("监听器未启动")
             return
 
-        # 启动汇总推送定时任务
-        self._summary_task = asyncio.create_task(self._summary_loop())
+        # 启动批量分析定时任务
+        self._batch_task = asyncio.create_task(self._batch_analysis_loop())
 
         logger.info("开始监听消息...")
 
         try:
-            # 运行 Telegram 客户端
             await self._client.run_forever()
         finally:
             await self.stop()
@@ -204,11 +190,11 @@ class TelegramMonitor:
 
         self._running = False
 
-        # 取消汇总任务
-        if self._summary_task:
-            self._summary_task.cancel()
+        # 取消批量任务
+        if self._batch_task:
+            self._batch_task.cancel()
             try:
-                await self._summary_task
+                await self._batch_task
             except asyncio.CancelledError:
                 pass
 
@@ -216,7 +202,6 @@ class TelegramMonitor:
         if self._client:
             await self._client.stop()
 
-        # 输出统计
         stats = self._stats.to_dict()
         logger.info(f"监听器已停止，统计: {stats}")
 
@@ -224,13 +209,9 @@ class TelegramMonitor:
         """
         新消息回调
 
-        处理流程：
-        1. 提取消息文本
-        2. 过滤器判定
-        3. 根据影响级别处理
+        简单过滤后入队列，不做 AI 分析
         """
         try:
-            # 提取文本
             text = message.text or message.message or ""
             if not text:
                 return
@@ -240,229 +221,161 @@ class TelegramMonitor:
             channel_title = getattr(channel, 'title', str(channel.id))
             channel_id = channel.id
 
-            if self._debug:
-                logger.debug(f"[{channel_title}] 收到消息: {text[:100]}...")
+            # 记录收到的消息
+            logger.info(f"[收到 #{self._stats.total_messages}] {channel_title}: {text[:60]}...")
 
-            # 过滤
+            # 简单过滤（只排除广告/垃圾）
             filter_result = self._filter.filter_message(text)
 
-            # 根据影响级别处理
             if filter_result.impact_level == ImpactLevel.EXCLUDED:
                 self._stats.excluded_count += 1
-                if self._debug:
-                    logger.debug(f"消息被排除: {filter_result.reason}")
+                logger.debug(f"[排除] {filter_result.reason}")
                 return
 
-            elif filter_result.impact_level == ImpactLevel.HIGH:
-                self._stats.high_impact_count += 1
-                await self._handle_high_impact(
-                    text, channel_title, channel_id, filter_result
-                )
+            # 入队列，等待批量分析
+            queued = QueuedMessage(
+                text=text,
+                channel_title=channel_title,
+                channel_id=channel_id,
+                timestamp=datetime.now(timezone(timedelta(hours=8))),
+                filter_result=filter_result
+            )
+            self._message_queue.append(queued)
+            self._stats.queued_count += 1
 
-            elif filter_result.impact_level == ImpactLevel.MEDIUM:
-                self._stats.medium_impact_count += 1
-                await self._handle_medium_impact(
-                    text, channel_title, channel_id, filter_result
-                )
-
-            else:  # LOW
-                self._stats.low_impact_count += 1
-                if self._debug:
-                    logger.debug(f"低影响消息: {text[:50]}...")
+            logger.debug(f"[入队] 当前队列: {len(self._message_queue)} 条")
 
         except Exception as e:
             self._stats.error_count += 1
             logger.error(f"处理消息时发生错误: {e}")
 
-    async def _handle_high_impact(
-        self,
-        text: str,
-        channel_title: str,
-        channel_id: int,
-        filter_result: FilterResult
-    ):
-        """
-        处理高影响消息：立即分析并推送
-        """
-        logger.info(f"🔴 高影响消息 [{channel_title}]: {text[:80]}...")
-        logger.info(f"   关键词: {filter_result.matched_keywords}")
-
-        # 检查推送限流
-        if not self._can_push():
-            logger.warning("达到每小时推送上限，消息加入队列")
-            self._add_to_queue(text, channel_title, channel_id, filter_result)
-            return
-
-        # AI 分析
-        analysis = await asyncio.to_thread(
-            self._analyzer.analyze,
-            text,
-            channel_title,
-            filter_result.category
-        )
-
-        # 格式化推送内容
-        notification = self._format_high_impact_notification(
-            text, channel_title, filter_result, analysis
-        )
-
-        # 推送
-        success = await self._push_notification(notification)
-
-        if success:
-            self._stats.push_count += 1
-            logger.info("高影响消息已推送")
-
-    async def _handle_medium_impact(
-        self,
-        text: str,
-        channel_title: str,
-        channel_id: int,
-        filter_result: FilterResult
-    ):
-        """
-        处理中等影响消息：加入队列，定时汇总推送
-        """
-        logger.info(f"🟡 中等影响消息 [{channel_title}]: {text[:50]}...")
-
-        self._add_to_queue(text, channel_title, channel_id, filter_result)
-
-    def _add_to_queue(
-        self,
-        text: str,
-        channel_title: str,
-        channel_id: int,
-        filter_result: FilterResult
-    ):
-        """添加消息到队列"""
-        queued = QueuedMessage(
-            text=text,
-            channel_title=channel_title,
-            channel_id=channel_id,
-            timestamp=datetime.now(timezone(timedelta(hours=8))),
-            filter_result=filter_result
-        )
-        self._message_queue.append(queued)
-
-    async def _summary_loop(self):
-        """汇总推送定时循环"""
-        interval_seconds = self._summary_interval * 60
+    async def _batch_analysis_loop(self):
+        """批量分析定时循环"""
+        interval_seconds = self._batch_interval * 60
 
         while self._running:
             try:
                 await asyncio.sleep(interval_seconds)
 
                 if self._message_queue:
-                    await self._push_summary()
+                    await self._process_batch()
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"汇总推送失败: {e}")
+                logger.error(f"批量分析失败: {e}")
 
-    async def _push_summary(self):
-        """推送汇总消息"""
+    async def _process_batch(self):
+        """处理一批消息"""
         if not self._message_queue:
             return
 
-        # 取出所有待推送消息
+        # 取出所有待分析消息
         messages = list(self._message_queue)
         self._message_queue.clear()
 
-        logger.info(f"准备推送汇总: {len(messages)} 条消息")
+        logger.info(f"========== 开始批量分析 {len(messages)} 条消息 ==========")
 
-        # 格式化汇总内容
-        notification = self._format_summary_notification(messages)
+        # 构建批量分析文本
+        batch_text = self._build_batch_text(messages)
 
-        # 推送
-        success = await self._push_notification(notification)
+        # 调用 AI 批量分析
+        analysis_result = await asyncio.to_thread(
+            self._analyzer.analyze_batch,
+            batch_text,
+            len(messages)
+        )
 
-        if success:
-            self._stats.push_count += 1
-            logger.info("汇总推送成功")
+        self._stats.analyzed_count += len(messages)
 
-    def _format_high_impact_notification(
-        self,
-        text: str,
-        channel_title: str,
-        filter_result: FilterResult,
-        analysis: NewsImpactResult
-    ) -> str:
-        """格式化高影响消息通知"""
-        bj_time = datetime.now(timezone(timedelta(hours=8))).strftime('%H:%M')
+        if not analysis_result.success:
+            logger.warning(f"AI 分析失败: {analysis_result.error_message}")
+            return
 
-        lines = [
-            f"## 🚨 高影响消息提醒",
-            f"",
-            f"**时间**: {bj_time}",
-            f"**来源**: {channel_title}",
-            f"**分类**: {filter_result.category}",
-            f"**关键词**: {', '.join(filter_result.matched_keywords[:5])}",
-            f"",
-            f"### 原文摘要",
-            f"> {text[:300]}{'...' if len(text) > 300 else ''}",
-            f"",
+        # 筛选有价值的消息
+        valuable_items = [
+            item for item in analysis_result.items
+            if item.get('impact_magnitude', 0) >= self.IMPACT_THRESHOLD
         ]
 
-        if analysis.success:
-            lines.extend([
-                f"### AI 分析",
-                f"",
-                analysis.format_notification(),
-                f"",
-            ])
+        self._stats.valuable_count += len(valuable_items)
 
-        return '\n'.join(lines)
+        logger.info(f"分析完成: {len(messages)} 条消息, {len(valuable_items)} 条有价值")
 
-    def _format_summary_notification(self, messages: List[QueuedMessage]) -> str:
-        """格式化汇总通知"""
+        if valuable_items:
+            # 格式化并推送
+            notification = self._format_batch_notification(valuable_items, len(messages))
+            success = await self._push_notification(notification)
+
+            if success:
+                self._stats.pushed_count += 1
+                logger.info("批量推送成功")
+
+    def _build_batch_text(self, messages: List[QueuedMessage]) -> str:
+        """构建批量分析的输入文本"""
+        lines = []
+        for i, msg in enumerate(messages, 1):
+            time_str = msg.timestamp.strftime('%H:%M')
+            # 截取每条消息前 200 字符
+            text = msg.text[:200] + ('...' if len(msg.text) > 200 else '')
+            lines.append(f"[{i}] [{time_str}] {msg.channel_title}: {text}")
+
+        return '\n\n'.join(lines)
+
+    def _format_batch_notification(
+        self,
+        valuable_items: List[Dict[str, Any]],
+        total_count: int
+    ) -> str:
+        """格式化批量分析推送内容"""
         bj_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')
 
-        # 按分类分组
-        by_category: Dict[str, List[QueuedMessage]] = {}
-        for msg in messages:
-            category = msg.filter_result.category or "其他"
-            if category not in by_category:
-                by_category[category] = []
-            by_category[category].append(msg)
-
         lines = [
-            f"## 📊 时政经济汇总",
+            f"## 📊 时政经济情报汇总",
             f"",
             f"**时间**: {bj_time}",
-            f"**消息数**: {len(messages)} 条",
+            f"**分析消息**: {total_count} 条 → 有价值: {len(valuable_items)} 条",
             f"",
+            "---",
+            "",
         ]
 
-        for category, msgs in by_category.items():
-            lines.append(f"### {category} ({len(msgs)}条)")
-            lines.append("")
+        for item in valuable_items:
+            emoji = self._get_impact_emoji(item.get('impact_direction', '中性'))
+            magnitude = item.get('impact_magnitude', 0)
+            summary = item.get('summary', '')
+            sectors = item.get('affected_sectors', [])
+            suggestion = item.get('action_suggestion', '')
 
-            for i, msg in enumerate(msgs[:5], 1):  # 每类最多显示5条
-                time_str = msg.timestamp.strftime('%H:%M')
-                summary = msg.text[:80] + ('...' if len(msg.text) > 80 else '')
-                lines.append(f"{i}. [{time_str}] {summary}")
+            lines.append(f"### {emoji} {summary}")
+            lines.append(f"")
+            lines.append(f"- **影响程度**: {'█' * magnitude}{'░' * (10-magnitude)} {magnitude}/10")
+            lines.append(f"- **影响方向**: {item.get('impact_direction', '中性')}")
 
-            if len(msgs) > 5:
-                lines.append(f"   ...还有 {len(msgs) - 5} 条")
+            if sectors:
+                lines.append(f"- **相关板块**: {', '.join(sectors[:5])}")
+
+            if suggestion:
+                lines.append(f"- **建议**: {suggestion}")
 
             lines.append("")
 
         return '\n'.join(lines)
+
+    def _get_impact_emoji(self, direction: str) -> str:
+        """获取影响方向 emoji"""
+        return {'利好': '🟢', '利空': '🔴', '中性': '⚪'}.get(direction, '⚪')
 
     async def _push_notification(self, content: str) -> bool:
         """推送通知"""
         try:
-            # 记录推送时间
             self._push_timestamps.append(
                 datetime.now(timezone(timedelta(hours=8)))
             )
 
-            # 截断过长内容
             if len(content) > 3800:
                 content = content[:3800] + "\n...(已截断)"
 
-            # 推送到企业微信
             if self._notifier.is_available():
                 success = self._notifier.send_to_wechat(content)
                 return success
@@ -479,13 +392,11 @@ class TelegramMonitor:
         now = datetime.now(timezone(timedelta(hours=8)))
         one_hour_ago = now - timedelta(hours=1)
 
-        # 清理过期的推送记录
         self._push_timestamps = [
             ts for ts in self._push_timestamps
             if ts > one_hour_ago
         ]
 
-        # 检查是否达到上限
         return len(self._push_timestamps) < self._hourly_limit
 
     def get_stats(self) -> Dict[str, Any]:
@@ -499,14 +410,14 @@ class TelegramMonitor:
 
 
 async def run_telegram_monitor(
-    summary_interval: int = 60,
+    summary_interval: int = 5,
     debug: bool = False
 ):
     """
-    运行 Telegram 监听器的便捷函数
+    运行 Telegram 监听器
 
     Args:
-        summary_interval: 汇总推送间隔（分钟）
+        summary_interval: 批量分析间隔（分钟），默认 5 分钟
         debug: 调试模式
     """
     config = get_config()
@@ -520,7 +431,7 @@ async def run_telegram_monitor(
         return
 
     monitor = TelegramMonitor(
-        summary_interval_minutes=summary_interval,
+        batch_interval_minutes=summary_interval,
         debug=debug
     )
 

@@ -173,6 +173,7 @@ class TelegramClientWrapper:
             try:
                 message = event.message
                 chat = await event.get_chat()
+                logger.info(f"[收到消息] 频道: {chat.title}, 内容: {message.text[:50] if message.text else '(无文本)'}...")
                 await message_callback(message, chat)
             except Exception as e:
                 logger.error(f"处理消息时发生错误: {e}")

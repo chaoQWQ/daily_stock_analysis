@@ -39,6 +39,17 @@ class NewsImpactResult:
     success: bool = True
     error_message: Optional[str] = None
 
+
+@dataclass
+class BatchAnalysisResult:
+    """批量分析结果"""
+    items: List[Dict[str, Any]] = field(default_factory=list)  # 每条消息的分析结果
+    total_count: int = 0
+    valuable_count: int = 0
+    raw_response: Optional[str] = None
+    success: bool = True
+    error_message: Optional[str] = None
+
     def to_dict(self) -> Dict[str, Any]:
         """转换为字典"""
         return {
@@ -327,7 +338,7 @@ class TelegramNewsAnalyzer:
         delay_between: float = 2.0
     ) -> List[NewsImpactResult]:
         """
-        批量分析多条消息
+        批量分析多条消息（逐条调用）
 
         Args:
             messages: 消息文本列表
@@ -346,3 +357,142 @@ class TelegramNewsAnalyzer:
             results.append(result)
 
         return results
+
+    def analyze_batch(
+        self,
+        batch_text: str,
+        message_count: int
+    ) -> BatchAnalysisResult:
+        """
+        批量分析多条消息（单次 API 调用）
+
+        将多条消息合并成一个 prompt，让 AI 一次性分析
+
+        Args:
+            batch_text: 合并后的消息文本
+            message_count: 消息数量
+
+        Returns:
+            BatchAnalysisResult 批量分析结果
+        """
+        if not self.is_available():
+            return BatchAnalysisResult(
+                success=False,
+                error_message="Gemini API 未配置"
+            )
+
+        try:
+            prompt = self._build_batch_prompt(batch_text, message_count)
+
+            config = get_config()
+            delay = config.gemini_request_delay
+            if delay > 0:
+                time.sleep(delay)
+
+            response = self._model.generate_content(
+                prompt,
+                generation_config={
+                    "temperature": 0.3,
+                    "max_output_tokens": 4096,
+                },
+                request_options={"timeout": 120}
+            )
+
+            if response and response.text:
+                return self._parse_batch_response(response.text, message_count)
+            else:
+                return BatchAnalysisResult(
+                    success=False,
+                    error_message="API 返回空响应"
+                )
+
+        except Exception as e:
+            logger.error(f"批量分析失败: {e}")
+            return BatchAnalysisResult(
+                success=False,
+                error_message=str(e)
+            )
+
+    def _build_batch_prompt(self, batch_text: str, message_count: int) -> str:
+        """构建批量分析 prompt"""
+        from datetime import datetime, timezone, timedelta
+
+        bj_time = datetime.now(timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M')
+
+        return f"""## 批量消息分析请求
+
+**时间**: {bj_time}
+**消息数量**: {message_count} 条
+
+请分析以下消息对 **A股市场** 的影响。只筛选出有价值的消息（影响程度 >= 4）。
+
+### 消息列表
+
+{batch_text}
+
+---
+
+### 输出要求
+
+请输出 JSON 格式，只包含有价值的消息分析结果：
+
+```json
+{{
+    "items": [
+        {{
+            "index": 1,
+            "summary": "一句话总结（30字以内）",
+            "impact_direction": "利好/利空/中性",
+            "impact_magnitude": 1-10,
+            "affected_sectors": ["板块1", "板块2"],
+            "action_suggestion": "操作建议"
+        }}
+    ],
+    "total_analyzed": {message_count},
+    "valuable_count": 有价值的消息数量
+}}
+```
+
+### 评分标准
+- **8-10分**: 重大政策/事件（降准降息、贸易战、制裁）
+- **6-7分**: 行业重大消息、宏观数据超预期
+- **4-5分**: 一般行业消息、国际市场联动
+- **1-3分**: 轻微影响或间接相关
+- **0分**: 与 A股 无关
+
+只输出 JSON，不要有其他文字。如果没有有价值的消息，items 返回空数组。"""
+
+    def _parse_batch_response(self, response_text: str, message_count: int) -> BatchAnalysisResult:
+        """解析批量分析响应"""
+        try:
+            cleaned = response_text
+            if '```json' in cleaned:
+                cleaned = cleaned.replace('```json', '').replace('```', '')
+            elif '```' in cleaned:
+                cleaned = cleaned.replace('```', '')
+
+            json_start = cleaned.find('{')
+            json_end = cleaned.rfind('}') + 1
+
+            if json_start >= 0 and json_end > json_start:
+                json_str = cleaned[json_start:json_end]
+                data = json.loads(json_str)
+
+                items = data.get('items', [])
+
+                return BatchAnalysisResult(
+                    items=items,
+                    total_count=data.get('total_analyzed', message_count),
+                    valuable_count=data.get('valuable_count', len(items)),
+                    raw_response=response_text,
+                    success=True
+                )
+
+        except (json.JSONDecodeError, ValueError) as e:
+            logger.warning(f"批量分析 JSON 解析失败: {e}")
+
+        return BatchAnalysisResult(
+            raw_response=response_text,
+            success=False,
+            error_message="JSON 解析失败"
+        )
