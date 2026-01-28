@@ -714,6 +714,19 @@ def parse_arguments() -> argparse.Namespace:
         help='跳过数据下载，使用本地缓存'
     )
 
+    parser.add_argument(
+        '--telegram-monitor',
+        action='store_true',
+        help='启动 Telegram 频道监听模式（监听全球时政经济信息）'
+    )
+
+    parser.add_argument(
+        '--telegram-summary',
+        type=int,
+        default=60,
+        help='Telegram 汇总推送间隔（分钟，默认60）'
+    )
+
     return parser.parse_args()
 
 
@@ -734,6 +747,34 @@ def run_morning_job(notifier: NotificationService, analyzer=None, search_service
 
     except Exception as e:
         logger.exception(f"早盘任务失败: {e}")
+
+
+def run_telegram_monitor_job(args) -> None:
+    """
+    执行 Telegram 频道监听任务
+
+    Args:
+        args: 命令行参数
+    """
+    import asyncio
+
+    logger.info("启动 Telegram 频道监听...")
+
+    try:
+        from telegram_monitor import TelegramMonitor
+        from telegram_monitor.monitor import run_telegram_monitor
+
+        # 运行异步监听器
+        asyncio.run(run_telegram_monitor(
+            summary_interval=args.telegram_summary,
+            debug=args.debug
+        ))
+
+    except ImportError as e:
+        logger.error(f"导入 telegram_monitor 模块失败: {e}")
+        logger.error("请确保已安装 telethon: pip install telethon>=1.34.0")
+    except Exception as e:
+        logger.exception(f"Telegram 监听任务失败: {e}")
 
 
 def run_shaofu_job(notifier: NotificationService, args, search_service=None) -> None:
@@ -949,6 +990,12 @@ def main() -> int:
         if args.morning:
             logger.info("模式: 早盘策略分析")
             run_morning_job(notifier, analyzer, search_service)
+            return 0
+
+        # 模式0.3: Telegram 监听
+        if args.telegram_monitor:
+            logger.info("模式: Telegram 频道监听")
+            run_telegram_monitor_job(args)
             return 0
 
         # 模式0.5: ShaoFu 选股策略

@@ -73,6 +73,15 @@ class Config:
     schedule_enabled: bool = False            # 是否启用定时任务
     schedule_time: str = "18:00"              # 每日推送时间（HH:MM 格式）
     market_review_enabled: bool = True        # 是否启用大盘复盘
+
+    # === Telegram 监听配置 ===
+    telegram_enabled: bool = False            # 是否启用 Telegram 监听
+    telegram_api_id: Optional[int] = None     # Telegram API ID
+    telegram_api_hash: Optional[str] = None   # Telegram API Hash
+    telegram_phone: Optional[str] = None      # 手机号（用于登录验证）
+    telegram_session: Optional[str] = None    # StringSession（用于无交互环境）
+    telegram_channels: List[int] = field(default_factory=list)  # 监听的频道 ID 列表
+    telegram_summary_interval: int = 60       # 汇总推送间隔（分钟）
     
     # === 流控配置（防封禁关键参数）===
     # Akshare 请求间隔范围（秒）
@@ -138,6 +147,26 @@ class Config:
         # 兼容 SERPAPI_API_KEYS 和 SERPAPI_KEYS 两种命名
         serpapi_keys_str = os.getenv('SERPAPI_API_KEYS') or os.getenv('SERPAPI_KEYS', '')
         serpapi_keys = [k.strip() for k in serpapi_keys_str.split(',') if k.strip()]
+
+        # 解析 Telegram 频道列表（逗号分隔的频道 ID）
+        telegram_channels_str = os.getenv('TELEGRAM_CHANNELS', '')
+        telegram_channels = []
+        for ch in telegram_channels_str.split(','):
+            ch = ch.strip()
+            if ch:
+                try:
+                    telegram_channels.append(int(ch))
+                except ValueError:
+                    pass  # 忽略无效的频道 ID
+
+        # 解析 Telegram API ID
+        telegram_api_id = None
+        api_id_str = os.getenv('TELEGRAM_API_ID', '')
+        if api_id_str:
+            try:
+                telegram_api_id = int(api_id_str)
+            except ValueError:
+                pass
         
         return cls(
             stock_list=stock_list,
@@ -164,6 +193,14 @@ class Config:
             schedule_enabled=os.getenv('SCHEDULE_ENABLED', 'false').lower() == 'true',
             schedule_time=os.getenv('SCHEDULE_TIME', '18:00'),
             market_review_enabled=os.getenv('MARKET_REVIEW_ENABLED', 'true').lower() == 'true',
+            # Telegram 配置
+            telegram_enabled=os.getenv('TELEGRAM_ENABLED', 'false').lower() == 'true',
+            telegram_api_id=telegram_api_id,
+            telegram_api_hash=os.getenv('TELEGRAM_API_HASH'),
+            telegram_phone=os.getenv('TELEGRAM_PHONE'),
+            telegram_session=os.getenv('TELEGRAM_SESSION'),  # StringSession 字符串
+            telegram_channels=telegram_channels,
+            telegram_summary_interval=int(os.getenv('TELEGRAM_SUMMARY_INTERVAL', '60')),
         )
     
     @classmethod
