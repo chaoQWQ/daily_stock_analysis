@@ -26,6 +26,7 @@ RUN pip install --no-cache-dir -r requirements.txt -i https://pypi.tuna.tsinghua
 # 复制应用代码
 COPY *.py ./
 COPY data_provider/ ./data_provider/
+COPY telegram_monitor/ ./telegram_monitor/
 
 # 创建数据目录
 RUN mkdir -p /app/data /app/logs /app/reports
