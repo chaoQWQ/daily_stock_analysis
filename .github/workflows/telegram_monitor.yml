@@ -67,6 +67,13 @@ jobs:
           # 企业微信推送
           WECHAT_WEBHOOK_URL: ${{ secrets.WECHAT_WEBHOOK_URL }}
 
+          # 邮件推送
+          EMAIL_SENDER: ${{ secrets.EMAIL_SENDER }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_RECEIVER: ${{ secrets.EMAIL_RECEIVER }}
+          SMTP_SERVER: 'smtp.qq.com'
+          SMTP_PORT: '465'
+
           # 其他配置
           LOG_LEVEL: ${{ github.event.inputs.debug == 'true' && 'DEBUG' || 'INFO' }}
         run: |
