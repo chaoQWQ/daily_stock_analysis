@@ -97,7 +97,8 @@ class TelegramClientWrapper:
         """
         启动客户端并完成登录
 
-        首次登录需要输入验证码
+        首次登录需要输入验证码（仅文件 Session 模式）
+        StringSession 模式无需交互
 
         Returns:
             是否成功启动
@@ -105,7 +106,17 @@ class TelegramClientWrapper:
         try:
             logger.info("正在连接 Telegram...")
 
-            await self._client.start(phone=self._phone)
+            # 根据 session 类型选择启动方式
+            if self._session_string:
+                # StringSession 模式：已有认证信息，直接连接
+                await self._client.connect()
+
+                if not await self._client.is_user_authorized():
+                    logger.error("StringSession 无效或已过期，请重新生成")
+                    return False
+            else:
+                # 文件 Session 模式：可能需要手机号验证
+                await self._client.start(phone=self._phone)
 
             me = await self._client.get_me()
             logger.info(f"Telegram 登录成功: {me.first_name} (@{me.username})")
